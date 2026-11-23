@@ -1,8 +1,8 @@
 # MaNGaL pipeline
 
 Data reduction pipeline for **MaNGaL** (Mapper of Narrow Galaxy Lines), a tunable-filter photometer
-based on a scanning Fabry–Pérot interferometer. It turns a night of raw frames into continuum-subtracted,
-astrometrically calibrated and flux-calibrated emission-line images (Hα, [N II], [O III], …).
+based on a scanning Fabry–Perot interferometer. It turns a night of raw frames into continuum-subtracted,
+astrometrically calibrated and flux-calibrated emission-line images (Hα, [N II], [O III] and others).
 
 There are two ways to run it:
 
