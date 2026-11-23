@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+__MACOSX/
+._*
+.idea/
+.vscode/
+
+# Data and pipeline products (keep them out of the repository)
+*.fits
+*.fts
+*.fit
+*.fits.*
+*.png
+*.csv
+*.xy
+QE_*.json
+*_auto.txt
+
+# ...but keep the bundled reference data and examples
+!data/**
+!examples/**
+
+# Secrets
+.env

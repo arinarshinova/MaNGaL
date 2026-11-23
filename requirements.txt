@@ -1,0 +1,22 @@
+# MaNGaL pipeline - Python >= 3.10
+# Install with:  pip install -r requirements.txt
+
+# --- core ---
+numpy>=1.24
+scipy>=1.10
+astropy>=5.3
+pandas>=2.0
+matplotlib>=3.7
+scikit-image>=0.21
+
+# --- optional: style of the photometry plots (works without it) ---
+SciencePlots>=2.1
+
+# --- cosmic-ray cleaning, L.A.Cosmic (--cr, --cr-final) ---
+astroscrappy>=1.1
+
+# --- astrometry via nova.astrometry.net (--astro) ---
+requests>=2.28
+
+# --- graphical interface (mangal_qt6_gui.py) ---
+PyQt6>=6.4

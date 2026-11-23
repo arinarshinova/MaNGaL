@@ -1,0 +1,19 @@
+SIMPLE  =                              T / MaNGaL DATA REDUCTION
+
+BINNING = '1x1'
+NIGHT   = 't261012_'
+R_DIR   = '/path/to/data/t261012'
+W_DIR   = '/path/to/data/NGC7803'
+CCD_CUT = '0,0,1599,1599'
+FILTERS = 'SED675'
+CUB_OBJ = '04'
+CUB_FLAT= '09'
+NO_SHIFT= 0
+FLAT_DX = 0
+FLAT_DY = 0
+MASK_R  = 800
+MASK_XC = 790
+MASK_YC = 780
+TEXPNORM= 1
+
+END
