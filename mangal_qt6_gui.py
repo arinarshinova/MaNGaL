@@ -482,7 +482,13 @@ class MangalQt(QWidget):
         self.update_cubes_for_object()
         self._sync_wdir_for_mode()
     def _on_standard_toggled(self, checked: bool):
-        if checked:  # not applicable to a standard star; the other stages stay as ticked
+        if checked:
+            # usual stages of a standard-star reduction (each can still be unticked: only ticked stages run)
+            self.chk_prepare_cube.setChecked(True)
+            self.chk_shift.setChecked(True)
+            self.chk_phot_auto.setChecked(True)
+            self.chk_linecont.setChecked(True)
+            # not applicable to a standard star
             self.chk_net.setChecked(False)
             self.chk_astro.setChecked(False)
             self.chk_apply_ergs.setChecked(False)
@@ -1026,6 +1032,18 @@ class MangalQt(QWidget):
             self.log(f"[info] continuum subtraction plot: {p}")
             self._open_file(p)
 
+    def _show_qe_products(self, w_dir: Path, since: float):
+        """Open the QE plot written by this run (QE_<standard>_<filter>.png, next to the phot cube)."""
+        pngs = sorted(
+            (p for p in w_dir.rglob("QE_*.png") if p.stat().st_mtime >= since - 1.0),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        if not pngs:
+            self.log("[warn] QE plot was not found in W_DIR")
+            return
+        self.log(f"[info] QE plot: {pngs[0]}")
+        self._open_file(pngs[0])
+
     def _run_single_pipeline(self, *, rdir: Path, standard_mode: bool, target_name: str, target_cube: str | None, chosen_wdir: Path) -> int:
         try:
             params, meta = auto_params_from_log(rdir, target_name, target_cube, chosen_wdir)
@@ -1061,6 +1079,8 @@ class MangalQt(QWidget):
             self._show_photometry_products(w_dir)
         if ret == 0 and (not standard_mode) and self.chk_net.isChecked():
             self._show_subtraction_products(w_dir, t_start)
+        if ret == 0 and standard_mode and self.chk_qe.isChecked():
+            self._show_qe_products(w_dir, t_start)
         return ret
 
     def run_pipeline(self):

@@ -66,9 +66,10 @@ python mangal_qt6_gui.py
    pictures (`*_net_subtract.png`) are opened when the corresponding stages finish.
 
 Every stage runs only when its box is ticked; it takes the products of the earlier stages from `write_dir`,
-so any stage can be repeated alone. For a **standard star**, tick *standard* and choose the star, then tick the
-stages you need: the first time step 1 → shift → photometry → *QE calibration*, later e.g. *QE calibration* alone
-(it uses the existing `<star>_phot.fits`). *net*, *astrometry* and *apply ergs* do not apply to a standard. When *apply ergs* is ticked for an object, an existing `QE_*.json` of the night is used;
+so any stage can be repeated alone. For a **standard star**, tick *standard* and choose the star: step 1, shift, photometry and line+cont get ticked
+(untick what is already done), tick *QE calibration* to get the calibration. *QE calibration* can also run alone:
+it uses the existing `<star>_phot.fits`. When it finishes, the QE plot `QE_<star>_<filter>.png` is opened.
+*net*, *astrometry* and *apply ergs* do not apply to a standard. When *apply ergs* is ticked for an object, an existing `QE_*.json` of the night is used;
 if there is none, it is built first from the standard star selected in the *standard* list.
 
 The parameter file is written to `write_dir/<object>_auto.txt` and the exact command line is printed
