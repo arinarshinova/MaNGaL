@@ -211,6 +211,13 @@ While this window is open the log shows `[shift stars] WAITING …` and the run 
 if nothing seems to happen at the shift stage, look for the window *shift stars* (it may open behind other windows).
 
 `--shift-skip-frames "3,7-9"` excludes frames (1-based) from the shift measurement; their shift is interpolated.
+
+**Merged cubes.** The stars are followed frame by frame within the window, so a cube observed later (e.g. `_dz`)
+may be shifted beyond it or rotated. Before the frame-by-frame shift, every other cube is therefore registered to the
+reference frame as a whole: stars matched with any rotation, or, if that fails / with `--shift-manual-pairs`
+(GUI: *manual star pairs (between cubes)*), pairs of the same star clicked in a window (left: reference frame, right:
+the cube; right click = undo, Enter = done), refined with all stars. A frame where fewer than 2 stars are found gets
+the shift of the previous frame, with a warning in the log.
 The final star list (`<obj>_shift.stars.xy`) is reused by photometry and continuum scaling.
 Other files: `<obj>_shift.shifts.csv` (shift of every frame), `<obj>_shift.stars.png`, `<obj>_shift_frames/`.
 

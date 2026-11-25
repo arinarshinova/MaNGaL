@@ -263,6 +263,8 @@ class MangalQt(QWidget):
         self.shift_search_half.setRange(3, 300)
         self.shift_search_half.setValue(30)
 
+        self.chk_shift_manual = QCheckBox("manual star pairs (between cubes)")
+        self.chk_shift_manual.setToolTip("merged cubes: click star pairs to register every other cube to the reference frame")
         self.shift_skip_frames = QLineEdit()
         self.shift_skip_frames.setPlaceholderText("e.g. 3, 7-9")
         self.shift_skip_frames.setToolTip(
@@ -430,6 +432,7 @@ class MangalQt(QWidget):
         grid_shift.addWidget(self.shift_center_r, 2, 1)
         grid_shift.addWidget(QLabel("skip frames"), 3, 0)
         grid_shift.addWidget(self.shift_skip_frames, 3, 1)
+        grid_shift.addWidget(self.chk_shift_manual, 4, 0, 1, 2)
 
         bg_box = QGroupBox("background")
         grid_bg = QGridLayout(bg_box)
@@ -839,6 +842,8 @@ class MangalQt(QWidget):
                 "--shift-center-radius", str(self.shift_center_r.value()),
                 "--shift-skip-frames", self.shift_skip_frames.text().strip(),
             ]
+            if self.chk_shift_manual.isChecked():
+                args.append("--shift-manual-pairs")
 
         if self.chk_phot_auto.isChecked():
             args += [

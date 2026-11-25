@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from mangal_header import stamp
-from mangal_names import side_path
+from mangal_names import side_path, find_side, stage_path
 import numpy as np
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter, maximum_filter, shift as ndi_shift, binary_closing, binary_dilation, binary_erosion, binary_fill_holes
@@ -748,6 +748,79 @@ def save_window_diagnostics(out_dir: Path, cube: np.ndarray, stars: List[RefStar
         plt.close(preview_fig)
 
 
+def frame_cube_ids(in_fits: str | Path, nz: int) -> Optional[List[str]]:
+    """Cube number of every frame (from the FILE column of the .inputs.csv table), or None."""
+    import re as _re
+    import pandas as _pd
+    in_fits = Path(in_fits)
+    cands = [find_side(in_fits, ".inputs.csv")]
+    try:
+        cands.append(find_side(stage_path(in_fits, "darkflat"), ".inputs.csv"))
+    except Exception:
+        pass
+    for c in cands:
+        if not c.exists():
+            continue
+        try:
+            files = _pd.read_csv(c)["FILE"].astype(str).tolist()
+        except Exception:
+            continue
+        if len(files) != nz:
+            continue
+        ids = []
+        for f in files:
+            m = _re.search(r"_(\d{2})\d{2}$", Path(f).stem if f.endswith((".fts", ".fits")) else f)
+            ids.append(m.group(1) if m else "?")
+        return ids
+    return None
+
+
+def register_cubes(cube_work: np.ndarray, ref_index: int, frame_cubes: Sequence[str], manual: bool = False) -> List[dict]:
+    """
+    Frames of several observing cubes (merged at step 1) may be shifted far beyond the search window, or rotated,
+    with respect to the reference frame (e.g. a cube observed later under another name). Before the frame-by-frame
+    shift, every other cube is registered to the reference frame as a whole: stars matched with any rotation
+    (as for the combination of nights) or, if that fails / manual=True, pairs of stars clicked in a window.
+    All frames of the cube are then resampled IN PLACE onto the reference grid. Returns one dict per moved cube.
+    """
+    from mangal_combine import (detect_stars, fit_affine, manual_pairs, match_stars, refine_transform,
+                                warp_to_reference)
+    ref_cube = frame_cubes[ref_index]
+    ref_img = cube_work[ref_index]
+    rs = detect_stars(ref_img)
+    out = []
+    shape = cube_work.shape[1:]
+    for cid in dict.fromkeys(frame_cubes):  # cube order kept
+        if cid == ref_cube:
+            continue
+        idx = [k for k, c in enumerate(frame_cubes) if c == cid]
+        img = np.median(cube_work[idx[:3]], axis=0)  # first frames of the cube: deeper than one frame
+        ms = detect_stars(img)
+        m = None if manual else match_stars(rs, ms)
+        if m is not None:
+            A, b, rms, npairs, method = m["A"], m["b"], m["rms"], len(m["ref_idx"]), "auto"
+        else:
+            if not manual:
+                print(f"[shift cubes] cube {cid}: automatic star match with the reference frame failed "
+                      f"({len(ms)} stars): manual pairs", flush=True)
+            rxy, mxy = manual_pairs(ref_img, img, f"cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1})")
+            if len(rxy) < 3:
+                raise NoReferenceStarsError(f"cube {cid}: at least 3 star pairs are needed to register it, got {len(rxy)}")
+            A, b, _, rms = fit_affine(mxy, rxy)
+            npairs, method = len(rxy), "manual"
+            r2 = refine_transform(rs, ms, A, b)
+            if r2 is not None:
+                A, b, rms, npairs, method = r2["A"], r2["b"], r2["rms"], len(r2["ref_idx"]), "manual + refined"
+        angle = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
+        print(f"[shift cubes] cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> cube {ref_cube}: {method}, {npairs} stars, "
+              f"rms {rms:.2f} px, rotation {angle:+.2f} deg, shift ({b[0]:+.1f}, {b[1]:+.1f}) px", flush=True)
+        for k in idx:
+            cube_work[k] = np.nan_to_num(warp_to_reference(cube_work[k], A, b, shape), nan=0.0)
+        out.append({"cube": cid, "frames": (idx[0] + 1, idx[-1] + 1), "method": method, "npairs": npairs,
+                    "rms": rms, "angle": angle, "A": A, "b": b})
+    return out
+
+
 def align_cube(
     cube: np.ndarray,
     ref_index: int = 0,
@@ -761,7 +834,9 @@ def align_cube(
     extra_stars: Optional[Sequence[Tuple[float, float]]] = None,
     interactive: bool = True,
     skip_frames: Optional[Sequence[int]] = None,
-) -> Tuple[np.ndarray, np.ndarray, List[RefStar], np.ndarray, List[ShiftDebug], List[List[StarMeasure]], float, np.ndarray, np.ndarray, np.ndarray]:
+    frame_cubes: Optional[Sequence[str]] = None,
+    cube_manual: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, List[RefStar], np.ndarray, List[ShiftDebug], List[List[StarMeasure]], float, np.ndarray, np.ndarray, np.ndarray, List[dict]]:
     cube0 = _nan(cube).astype(np.float32, copy=False)
     if cube0.ndim == 2:
         cube0 = cube0[None, :, :]
@@ -782,6 +857,11 @@ def align_cube(
             bg_cube[k] = np.asarray(bgk, dtype=np.float32)
         if bgmk is not None:
             bg_mask_cube[k] = np.asarray(bgmk, dtype=np.uint8)
+
+    # several observing cubes: register each one to the reference frame first (rotation / large offsets)
+    cube_transforms: List[dict] = []
+    if frame_cubes is not None and len(set(frame_cubes)) > 1:
+        cube_transforms = register_cubes(cube_work, int(ref_index), list(frame_cubes), manual=cube_manual)
 
     ref_img = cube_work[int(ref_index)].copy()
 
@@ -896,6 +976,9 @@ def align_cube(
             dy_raw = -dy_apply
             dx_raw = -dx_apply
             method = "prev"
+            print(f"[shift stars] WARNING: frame {k + 1}: fewer than 2 stars found within the window ({search_half} px): "
+                  f"the shift of the previous frame is used. Larger window, 'skip frames', or manual star pairs "
+                  f"(frames of another cube)", flush=True)
             prev_positions[:, 0] = ref_positions[:, 0] + dx_raw
             prev_positions[:, 1] = ref_positions[:, 1] + dy_raw
         else:
@@ -931,7 +1014,7 @@ def align_cube(
     for k in range(nz):
         aligned[k] = ndi_shift(cube_work[k], shift=(float(shifts_apply[k, 0]), float(shifts_apply[k, 1])), order=shift_order, mode="constant", cval=0.0, prefilter=True)
 
-    return aligned, shifts_apply, stars, ref_img, debug_rows, all_meas, threshold, cube_work, bg_cube, bg_mask_cube
+    return aligned, shifts_apply, stars, ref_img, debug_rows, all_meas, threshold, cube_work, bg_cube, bg_mask_cube, cube_transforms
 
 
 def write_shifts_csv(path: Path, shifts_apply: np.ndarray, debug_rows: List[ShiftDebug]) -> None:
@@ -961,13 +1044,15 @@ def align_fits(
     extra_stars: Optional[Sequence[Tuple[float, float]]] = None,
     interactive: bool = True,
     skip_frames: Optional[Sequence[int]] = None,
+    cube_manual: bool = False,
 ) -> Tuple[Path, Path, Path, Path, Optional[Path]]:
     in_fits = Path(in_fits)
     out_fits = Path(out_fits)
     with fits.open(in_fits) as hdul:
         data = np.asarray(hdul[0].data, dtype=np.float32)
         hdr = hdul[0].header.copy()
-    aligned, shifts, stars, ref_img, debug_rows, measurements, threshold, *_ = align_cube(
+    frame_cubes = frame_cube_ids(in_fits, data.shape[0] if data.ndim == 3 else 1)
+    aligned, shifts, stars, ref_img, debug_rows, measurements, threshold, *_rest, cube_tr = align_cube(
         data,
         ref_index=ref_index,
         exclude_center=exclude_center,
@@ -979,7 +1064,13 @@ def align_fits(
         extra_stars=extra_stars,
         interactive=interactive,
         skip_frames=skip_frames,
+        frame_cubes=frame_cubes,
+        cube_manual=cube_manual,
     )
+    for t in cube_tr:
+        A, b = t["A"], t["b"]
+        hdr["HISTORY"] = (f"SHIFT: cube {t['cube']} registered ({t['method']}): A=[[{A[0,0]:.6f},{A[0,1]:.6f}],"
+                          f"[{A[1,0]:.6f},{A[1,1]:.6f}]] b=[{b[0]:.3f},{b[1]:.3f}] rms={t['rms']:.3f}px")
     if str(background_mode).strip().lower() not in ("none", "0", "off"):  # else keep BGMODE of step 1
         hdr['BGMODE'] = str(background_mode)
         hdr['BGWIN'] = int(background_window)

@@ -272,6 +272,7 @@ def _run_shift_stars(final_cube, out_shift, args, params):
             dump_frames=True,
             background_mode="none",
             skip_frames=_parse_frame_list(getattr(args, "shift_skip_frames", "")),
+            cube_manual=bool(getattr(args, "shift_manual_pairs", False)),
         )
     except NoReferenceStarsError as e:
         raise SystemExit(f"[shift] ERROR: {e}")
@@ -443,6 +444,9 @@ def main(argv=None) -> int:
     ap.add_argument("--upsample", type=int, default=10, help="Subpixel upsample factor for phase correlation")
     ap.add_argument("--shift-detect-snr", type=float, default=20.0, help="Detection threshold in robust sigma units for shift reference stars")
     ap.add_argument("--shift-search-half", type=int, default=30, help="Half-size of search window around previous-frame star position")
+    ap.add_argument("--shift-manual-pairs", action="store_true",
+                    help="Merged cubes: click star pairs to register every other cube to the reference frame "
+                         "(otherwise automatic, with the window only when that fails)")
     ap.add_argument("--shift-skip-frames", default="", help="Frames NOT used when measuring shifts, 1-based as in the '[shift stars] N/M' log lines, e.g. '3,7-9'. They stay in the cube; their shift is interpolated from the neighbouring frames")
     ap.add_argument("--shift-center-radius", type=float, default=0.0, help="Exclude shift reference stars inside radius r around mask center (pixels); 0 disables exclusion")
     ap.add_argument("--background-mode", default="backgr_sub", choices=["none","fon_corners","backgr_sub","plane","mean","min","corners_plane","corners_mean","corners_min"], help="Background subtraction at step 1 (with --prepare-calib / --cr), after CR cleaning; 'none' to switch off")
