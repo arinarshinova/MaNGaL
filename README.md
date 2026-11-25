@@ -61,7 +61,8 @@ python mangal_qt6_gui.py
    the `AUTHOR` of the raw data is shown under the object line.
 2. Choose the **object** and its **cube(s)**; **write_dir** defaults to `<night>/../<object>`.
    All cubes of the object are ticked by default and are merged into one (see [Several cubes](#several-cubes)).
-3. Tick the stages to run and adjust their parameters (shift, photometry, continuum subtraction).
+3. Tick the stages to run and adjust their parameters (shift, photometry, continuum subtraction);
+   the photometry parameters are folded away: click their title to open them.
 4. Press **run**. The log is shown in the window; the photometry plots and the subtraction
    pictures (`*_net_subtract.png`) are opened when the corresponding stages finish.
 

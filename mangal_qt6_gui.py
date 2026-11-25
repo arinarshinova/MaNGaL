@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QListWidget,
+    QToolButton,
 )
 from PyQt6.QtCore import QLocale, Qt
 from PyQt6.QtGui import QStandardItem
@@ -204,6 +205,32 @@ class CheckableComboBox(QComboBox):
         le = self.lineEdit()
         if le is not None:
             le.setText(', '.join(self.checked_texts()))
+
+
+class CollapsibleBox(QWidget):
+    """A titled panel that folds away: click the title to show / hide the contents (folded by default)."""
+
+    def __init__(self, title: str, content: QWidget, expanded: bool = False, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self.toggle = QToolButton()
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; }")
+        self.content = content
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        lay.addWidget(self.toggle)
+        lay.addWidget(self.content)
+        self.toggle.toggled.connect(self._set_expanded)
+        self._set_expanded(expanded)
+
+    def _set_expanded(self, on: bool):
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.toggle.setText(self._title)
+        self.content.setVisible(on)
 
 
 class MangalQt(QWidget):
@@ -453,7 +480,7 @@ class MangalQt(QWidget):
         grid_net.addWidget(self.local_mu_combo, 1, 3)
         grid_net.addWidget(self.star_match_chk, 2, 0, 1, 4)
 
-        phot_box = QGroupBox("photometry parameters")
+        phot_box = QGroupBox()
         grid_phot = QGridLayout(phot_box)
         grid_phot.addWidget(QLabel("win"), 0, 0)
         grid_phot.addWidget(self.win_spin, 0, 1)
@@ -475,7 +502,9 @@ class MangalQt(QWidget):
         params_grid.addWidget(bg_box, 0, 0)
         params_grid.addWidget(shift_box, 0, 1)
         params_grid.addWidget(net_box, 0, 2)
-        params_grid.addWidget(phot_box, 1, 0, 1, 3)
+        # changed rarely: folded away by default (click the title to open)
+        self.phot_panel = CollapsibleBox("photometry parameters", phot_box, expanded=False)
+        params_grid.addWidget(self.phot_panel, 1, 0, 1, 3)
 
         combine_box = QGroupBox("combine nights (write_dir of the other nights, after line+cont)")
         grid_comb = QGridLayout(combine_box)
