@@ -219,8 +219,10 @@ if nothing seems to happen at the shift stage, look for the window *shift stars*
 `--shift-skip-frames "3,7-9"` excludes frames (1-based) from the shift measurement; their shift is interpolated.
 
 **Merged cubes.** The stars are followed frame by frame within the window, so a cube observed later (e.g. `_dz`)
-may be shifted beyond it or rotated. Before the frame-by-frame shift, every other cube is therefore registered to the
-reference frame as a whole: stars matched with any rotation, or, if that fails / with `--shift-manual-pairs`
+may be shifted beyond it or rotated. Every next cube is therefore registered as a whole, when the shift reaches it,
+to the **last shifted frame of the previous cube** (the stars drift within a cube, so this is where the tracker
+expects them; registering to the first frame would make them jump at the boundary): stars matched with any rotation,
+or, if that fails / with `--shift-manual-pairs`
 (GUI: *manual star pairs (between cubes)*), pairs of the same star clicked in a window (left: reference frame, right:
 the cube; right click = undo, Enter = done), refined with all stars. A frame where fewer than 2 stars are found gets
 the shift of the previous frame, with a warning in the log.

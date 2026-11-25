@@ -775,50 +775,42 @@ def frame_cube_ids(in_fits: str | Path, nz: int) -> Optional[List[str]]:
     return None
 
 
-def register_cubes(cube_work: np.ndarray, ref_index: int, frame_cubes: Sequence[str], manual: bool = False) -> List[dict]:
+def register_cube_to(target_img: np.ndarray, cube_work: np.ndarray, idx: Sequence[int], cid: str, target_label: str,
+                     manual: bool = False) -> dict:
     """
-    Frames of several observing cubes (merged at step 1) may be shifted far beyond the search window, or rotated,
-    with respect to the reference frame (e.g. a cube observed later under another name). Before the frame-by-frame
-    shift, every other cube is registered to the reference frame as a whole: stars matched with any rotation
-    (as for the combination of nights) or, if that fails / manual=True, pairs of stars clicked in a window.
-    All frames of the cube are then resampled IN PLACE onto the reference grid. Returns one dict per moved cube.
+    Register one observing cube (its frames idx) to target_img, which is already on the reference grid, and resample
+    its frames IN PLACE onto that grid. Stars matched with any rotation (as for the combination of nights) or, if that
+    fails / manual=True, pairs of stars clicked in a window, refined with all stars.
     """
     from mangal_combine import (detect_stars, fit_affine, manual_pairs, match_stars, refine_transform,
                                 warp_to_reference)
-    ref_cube = frame_cubes[ref_index]
-    ref_img = cube_work[ref_index]
-    rs = detect_stars(ref_img)
-    out = []
+    idx = list(idx)
+    ts = detect_stars(target_img)
+    img = cube_work[idx[0]].copy()  # its first frame (a median of several frames would erase drifting stars)
+    ms = detect_stars(img)
+    m = None if manual else match_stars(ts, ms)
+    if m is not None:
+        A, b, rms, npairs, method = m["A"], m["b"], m["rms"], len(m["ref_idx"]), "auto"
+    else:
+        if not manual:
+            print(f"[shift cubes] cube {cid}: automatic star match with {target_label} failed "
+                  f"({len(ms)} stars): manual pairs", flush=True)
+        rxy, mxy = manual_pairs(target_img, img, f"cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> {target_label}")
+        if len(rxy) < 3:
+            raise NoReferenceStarsError(f"cube {cid}: at least 3 star pairs are needed to register it, got {len(rxy)}")
+        A, b, _, rms = fit_affine(mxy, rxy)
+        npairs, method = len(rxy), "manual"
+        r2 = refine_transform(ts, ms, A, b)
+        if r2 is not None:
+            A, b, rms, npairs, method = r2["A"], r2["b"], r2["rms"], len(r2["ref_idx"]), "manual + refined"
+    angle = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
+    print(f"[shift cubes] cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> {target_label}: {method}, {npairs} stars, "
+          f"rms {rms:.2f} px, rotation {angle:+.2f} deg, shift ({b[0]:+.1f}, {b[1]:+.1f}) px", flush=True)
     shape = cube_work.shape[1:]
-    for cid in dict.fromkeys(frame_cubes):  # cube order kept
-        if cid == ref_cube:
-            continue
-        idx = [k for k, c in enumerate(frame_cubes) if c == cid]
-        img = np.median(cube_work[idx[:3]], axis=0)  # first frames of the cube: deeper than one frame
-        ms = detect_stars(img)
-        m = None if manual else match_stars(rs, ms)
-        if m is not None:
-            A, b, rms, npairs, method = m["A"], m["b"], m["rms"], len(m["ref_idx"]), "auto"
-        else:
-            if not manual:
-                print(f"[shift cubes] cube {cid}: automatic star match with the reference frame failed "
-                      f"({len(ms)} stars): manual pairs", flush=True)
-            rxy, mxy = manual_pairs(ref_img, img, f"cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1})")
-            if len(rxy) < 3:
-                raise NoReferenceStarsError(f"cube {cid}: at least 3 star pairs are needed to register it, got {len(rxy)}")
-            A, b, _, rms = fit_affine(mxy, rxy)
-            npairs, method = len(rxy), "manual"
-            r2 = refine_transform(rs, ms, A, b)
-            if r2 is not None:
-                A, b, rms, npairs, method = r2["A"], r2["b"], r2["rms"], len(r2["ref_idx"]), "manual + refined"
-        angle = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
-        print(f"[shift cubes] cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> cube {ref_cube}: {method}, {npairs} stars, "
-              f"rms {rms:.2f} px, rotation {angle:+.2f} deg, shift ({b[0]:+.1f}, {b[1]:+.1f}) px", flush=True)
-        for k in idx:
-            cube_work[k] = np.nan_to_num(warp_to_reference(cube_work[k], A, b, shape), nan=0.0)
-        out.append({"cube": cid, "frames": (idx[0] + 1, idx[-1] + 1), "method": method, "npairs": npairs,
-                    "rms": rms, "angle": angle, "A": A, "b": b})
-    return out
+    for k in idx:
+        cube_work[k] = np.nan_to_num(warp_to_reference(cube_work[k], A, b, shape), nan=0.0)
+    return {"cube": cid, "frames": (idx[0] + 1, idx[-1] + 1), "to": target_label, "method": method,
+            "npairs": npairs, "rms": rms, "angle": angle, "A": A, "b": b}
 
 
 def align_cube(
@@ -858,10 +850,20 @@ def align_cube(
         if bgmk is not None:
             bg_mask_cube[k] = np.asarray(bgmk, dtype=np.uint8)
 
-    # several observing cubes: register each one to the reference frame first (rotation / large offsets)
+    # several observing cubes: a cube may be shifted far beyond the search window, or rotated, with respect to the
+    # previous one. Cubes BEFORE the reference cube are registered to the reference frame now; every cube AFTER it
+    # is registered, when the frame loop reaches it, to the last shifted frame of the previous cube (the stars drift
+    # within a cube, so the previous cube's last frame is what the tracker expects next: no jump at the boundary).
     cube_transforms: List[dict] = []
-    if frame_cubes is not None and len(set(frame_cubes)) > 1:
-        cube_transforms = register_cubes(cube_work, int(ref_index), list(frame_cubes), manual=cube_manual)
+    multi = frame_cubes is not None and len(set(frame_cubes)) > 1
+    fc = list(frame_cubes) if multi else []
+    if multi:
+        ref_cid = fc[int(ref_index)]
+        first_ref = fc.index(ref_cid)
+        for cid in dict.fromkeys(fc[:first_ref]):
+            idx = [k for k, c in enumerate(fc) if c == cid]
+            cube_transforms.append(register_cube_to(cube_work[int(ref_index)], cube_work, idx, cid,
+                                                    f"reference frame {int(ref_index) + 1}", manual=cube_manual))
 
     ref_img = cube_work[int(ref_index)].copy()
 
@@ -915,6 +917,18 @@ def align_cube(
         print("[shift stars] frames not used for the shifts (1-based): " + ", ".join(str(f + 1) for f in sorted(skip)), flush=True)
 
     for k in range(nz):
+        # start of a new observing cube after the reference cube: register it to the last shifted frame of the
+        # previous cube and continue the tracking from the reference positions (the cube is now on the reference grid)
+        if multi and k > int(ref_index) and fc[k] != fc[k - 1] and fc.index(fc[k]) == k:
+            prev = [j for j in range(k) if fc[j] == fc[k - 1]]
+            prev_meas = [j for j in prev if j not in skip] or prev
+            j_last = prev_meas[-1]
+            target = ndi_shift(cube_work[j_last], shift=(float(shifts_apply[j_last, 0]), float(shifts_apply[j_last, 1])),
+                               order=1, mode="constant", cval=0.0)
+            idx = [i for i, c in enumerate(fc) if c == fc[k]]
+            cube_transforms.append(register_cube_to(target, cube_work, idx, fc[k],
+                                                    f"shifted frame {j_last + 1} (cube {fc[j_last]})", manual=cube_manual))
+            prev_positions = ref_positions.copy()
         frame_meas: List[StarMeasure] = []
         dy_raws = []
         dx_raws = []
