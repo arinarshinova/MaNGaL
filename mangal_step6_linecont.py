@@ -253,6 +253,12 @@ def build_linecont_cube(
         labels.append(label)
         kinds.append(kind)
         used.append(bool(good_mask[i]) and kind in ("line", "cont"))
+    nolabel = sorted({int(z) for z, lab in zip(zspaces, labels) if lab == ""})
+    if nolabel:
+        n = sum(1 for lab in labels if lab == "")
+        print(f"[linecont] WARNING: {n} frame(s) with ZSPACE {', '.join(map(str, nolabel))} have no label in the ZSPACE log "
+              f"{Path(zspace_log_path).name} and are NOT used (merged cubes: are the ZSPACE values of every cube in the log?)",
+              flush=True)
 
     def _mean_img(idx):
         """EXPTIME-weighted mean (counts/sec) of the slices `idx`, and their total exposure."""

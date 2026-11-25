@@ -36,7 +36,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from mangal_step3 import parse_obs_log_table, read_author, select_cube_rows, cube_ids_list
+from mangal_step3 import parse_obs_log_table, read_author, select_cube_rows, cube_ids_list, object_rows
 from run_mangal import find_log_auto
 from mangal_standards import load_mangal_standards_for_night, normalize_star_id
 
@@ -71,7 +71,7 @@ def auto_params_from_log(r_dir: Path, object_name: str, cube_obj: str | None, w_
 
     if cube_obj:
         cube_obj = ",".join(cube_ids_list(cube_obj))
-        obj_sel = select_cube_rows(obj_rows, cube_obj)
+        obj_sel = object_rows(df, object_name, cube_obj)  # may include cubes of another OBJECT name
         if not obj_sel.empty:
             obj_rows = obj_sel
     else:
@@ -597,19 +597,35 @@ class MangalQt(QWidget):
             return
 
         type_col = df["TYPE"].astype(str).str.lower()
-        rows = df[(type_col == "obj") & (df["OBJECT"] == obj)]
-        cube_ids = set()
-        for fn in rows["FILE"]:
-            try:
-                cube_ids.add(extract_cube_id_from_file(str(fn)))
-            except Exception:
-                continue
-        cube_ids = sorted(cube_ids)
+        obj_all = df[type_col == "obj"]
+        rows = obj_all[obj_all["OBJECT"] == obj]
+
+        def _cubes(r):
+            out = {}
+            for fn, name in zip(r["FILE"].astype(str), r["OBJECT"].astype(str)):
+                try:
+                    out.setdefault(extract_cube_id_from_file(fn), name)
+                except Exception:
+                    continue
+            return out
+
+        own = _cubes(rows)
+        # cubes of other objects with the same filter can be added (unticked): e.g. PGC45443_dz to PGC45443,
+        # a cube observed again under another name; names that start with the object name come first
+        filt = set(rows["FILTERS"].astype(str).str.strip()) if "FILTERS" in rows.columns else set()
+        others_rows = obj_all[obj_all["OBJECT"] != obj]
+        if filt and "FILTERS" in others_rows.columns:
+            others_rows = others_rows[others_rows["FILTERS"].astype(str).str.strip().isin(filt)]
+        others = {c: n for c, n in _cubes(others_rows).items() if c not in own}
+        base = obj.lower()
+        others_sorted = sorted(others.items(), key=lambda cn: (not cn[1].lower().startswith(base), cn[0]))
 
         self.cube_combo.blockSignals(True)
         self.cube_combo.clear()
-        for cid in cube_ids:
+        for cid in sorted(own):
             self.cube_combo.add_check_item(cid, cid, checked=True)
+        for cid, name in others_sorted:
+            self.cube_combo.add_check_item(f"{cid} · {name}", cid, checked=False)
         self.cube_combo.blockSignals(False)
         try:
             self.cube_combo._update_text()

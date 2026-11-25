@@ -146,6 +146,12 @@ frames of cube 04 first, then of cube 05 (in the GUI: in increasing order), each
 All later stages run once on the merged cube; the first frame of the first cube is the reference for the shift.
 Frames with the same ZSPACE from different cubes go into the same line / continuum layer.
 
+Cubes are selected by number, so a cube logged under **another object name** can be merged as well, e.g. a galaxy
+observed again after a new ZSPACE calibration and logged as `PGC45443_dz`: `CUB_OBJ = '04,06'` with `--object PGC45443`.
+In the GUI the cube list of an object also offers, unticked, the cubes of other objects of the night with the same
+filter (`06 · PGC45443_dz`, names starting with the object name first): tick them to add them. The ZSPACE log must
+contain the ZSPACE values of every merged cube; frames with an unknown ZSPACE are reported and not used.
+
 One master dark and one master flat are used, so the cubes must have the **same filter and exposure time**;
 otherwise the run stops and lists the filter / exposure of every cube. Process such cubes one by one
 (tick one cube, or give one value of `CUB_OBJ`) with a different `write_dir` for each.

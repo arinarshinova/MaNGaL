@@ -262,6 +262,33 @@ def build_masterflat(df_log: pd.DataFrame, r_dir: str|Path, w_dir: str|Path, *,
     fits.writeto(out, master_norm, hdr, overwrite=True)
     return out
 
+def object_rows(df_log: pd.DataFrame, object_name: str, cube_id: str | None = None) -> pd.DataFrame:
+    """
+    obj frames of a reduction run.
+    - cube_id empty: all frames with OBJECT == object_name;
+    - cube_id given ('04' or '04,06'): the frames of these cubes, WHATEVER their OBJECT name. Cube numbers are unique
+      within a night, so a cube observed under another name (e.g. PGC45443_dz after a new ZSPACE calibration) can be
+      merged with the main one.
+    """
+    obj = df_log[df_log["TYPE"].astype(str).str.lower() == "obj"]
+    if cube_ids_list(cube_id):
+        return select_cube_rows(obj, cube_id)
+    return obj[obj["OBJECT"] == object_name].copy()
+
+
+def describe_cubes(rows: pd.DataFrame) -> str:
+    """'04: PGC45443 (12 frames), 06: PGC45443_dz (10 frames)' (cube order kept)."""
+    out = []
+    for fn, obj in zip(rows["FILE"].astype(str), rows["OBJECT"].astype(str)):
+        m = re.search(r"_(\d{2})\d{2}$", fn)
+        key = (m.group(1) if m else "?", obj)
+        if out and out[-1][0] == key:
+            out[-1][1] += 1
+        else:
+            out.append([key, 1])
+    return ", ".join(f"{c}: {o} ({n} frames)" for (c, o), n in out)
+
+
 def build_reduced_cube_darkflat(df_log: pd.DataFrame, r_dir: str|Path, w_dir: str|Path, *,
                                object_name: str,
                                cube_id: str | None,
@@ -278,10 +305,11 @@ def build_reduced_cube_darkflat(df_log: pd.DataFrame, r_dir: str|Path, w_dir: st
     eps = 1e-6
     mf_safe = np.where(np.isfinite(mf) & (mf > eps), mf, np.nan).astype(np.float32)
 
-    rows = df_log[(df_log["TYPE"]=="obj") & (df_log["OBJECT"]==object_name)].copy()
-    rows = select_cube_rows(rows, cube_id)
+    rows = object_rows(df_log, object_name, cube_id)
     if rows.empty:
         raise FileNotFoundError(f"No obj frames found for OBJECT={object_name} (cube_id={cube_id})")
+    if len(cube_ids_list(cube_id)) > 1 or (rows["OBJECT"] != object_name).any():
+        print(f"[cubes] merged: {describe_cubes(rows)}")
 
     imgs = []
     meta = []  # per-slice metadata for downstream steps (e.g., step6 line/cont)

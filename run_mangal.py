@@ -106,7 +106,7 @@ from mangal_names import object_stage_path, stage_path, legacy_line_path, side_p
 from mangal_step3 import (
     parse_param_file, parse_obs_log_table,
     build_masterdark, build_masterflat,
-    build_reduced_cube_darkflat, clean_cosmics_cube, shift_cube, select_cube_rows, cube_ids_list
+    build_reduced_cube_darkflat, clean_cosmics_cube, shift_cube, select_cube_rows, cube_ids_list, object_rows
 )
 
 from mangal_step8_ergcal import compute_qe_from_standard, apply_ergs_to_fits, _find_latest_json
@@ -521,13 +521,11 @@ def main(argv=None) -> int:
     df = parse_obs_log_table(log_path)
 
     # object exposure (prefer series)
-    obj_rows = df[(df["TYPE"] == "obj") & (df["OBJECT"] == args.object_name)].copy()
+    # with CUB_OBJ the cubes are taken by number, whatever their OBJECT name (e.g. PGC45443 + PGC45443_dz)
+    obj_rows = object_rows(df, args.object_name, cub_obj)
     if obj_rows.empty:
-        raise SystemExit(f"No obj frames for OBJECT={args.object_name}")
-    if cub_obj:
-        obj_rows = select_cube_rows(obj_rows, cub_obj)
-        if obj_rows.empty:
-            raise SystemExit(f"No obj frames of OBJECT={args.object_name} in cube(s) CUB_OBJ={cub_obj}")
+        raise SystemExit(f"No obj frames for OBJECT={args.object_name}"
+                         + (f" in cube(s) CUB_OBJ={cub_obj}" if cub_obj else ""))
     _check_same_setup(obj_rows, cub_obj)
     texp_obj = int(obj_rows.iloc[0]["Texp"])
 
