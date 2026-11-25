@@ -163,7 +163,8 @@ def write_layer_table(hdr, layers: list[dict]) -> None:
     """
     Store the layer description in the FITS header (hdr behaves like astropy Header):
         NLAYERS, and for every layer n: LAYERn name, LKINDn line|cont, LROLEn total|group,
-        LTAGn file-name tag (lines), LZSPn ZSPACE values, LTEXPn exposure [s], LNFRn frames, LZMEANn mean zenith distance.
+        LTAGn file-name tag (lines), LZSPn ZSPACE values, LTEXPn exposure [s], LNFRn frames, LZMEANn mean zenith distance,
+        LLAMn mean wavelength [A] (combined nights).
     """
     hdr["NLAYERS"] = (len(layers), "number of layers in the cube")
     for n, L in enumerate(layers):
@@ -180,6 +181,8 @@ def write_layer_table(hdr, layers: list[dict]) -> None:
             hdr[f"LNFR{n}"] = (int(L["nframes"]), "number of frames in the layer")
         if L.get("zmean") is not None:
             hdr[f"LZMEAN{n}"] = (round(float(L["zmean"]), 3), "[deg] mean zenith distance of the layer")
+        if L.get("lam") is not None:
+            hdr[f"LLAM{n}"] = (round(float(L["lam"]), 3), "[A] mean wavelength of the layer")
 
 
 def read_layer_table(hdr, nlayers_in_data: int | None = None) -> list[dict]:
@@ -202,6 +205,7 @@ def read_layer_table(hdr, nlayers_in_data: int | None = None) -> list[dict]:
                 "texp": hdr.get(f"LTEXP{i}", None),
                 "nframes": hdr.get(f"LNFR{i}", None),
                 "zmean": hdr.get(f"LZMEAN{i}", None),
+                "lam": hdr.get(f"LLAM{i}", None),
             })
         return layers
     # legacy: layer 0 = line_sum, layer 1 = cont_sum

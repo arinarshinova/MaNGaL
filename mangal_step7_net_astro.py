@@ -1102,7 +1102,12 @@ def make_subtraction_figure(line: np.ndarray, cont: np.ndarray, net: np.ndarray,
     return out_png
 
 
-_LAYER_KEY_RE = re.compile(r"^(NLAYERS|(LAYER|LKIND|LROLE|LTAG|LZSP|LTEXP)\d+)$")
+_LAYER_KEY_RE = re.compile(r"^(NLAYERS|(LAYER|LKIND|LROLE|LTAG|LZSP|LTEXP|LNFR|LZMEAN|LLAM)\d+)$")
+
+
+def _layer_zspaces(L) -> list[str]:
+    """ZSPACE values of a layer; combined nights separate their values with '/' (not comparable between nights)."""
+    return [z for z in re.split(r"[;/]", str(L.get("zspace") or "")) if z.strip()]
 
 
 def _num(x):
@@ -1146,7 +1151,10 @@ def _hdr_for_layer(hdr, layers: list[dict], line_layer: int, cont_layer: int | N
             for k in ("ZMEAN",):
                 if k in h:
                     del h[k]
-        zs = [z for z in str(L.get("zspace") or "").split(";") if z.strip()]
+        zs = _layer_zspaces(L)
+        lam = _num(L.get("lam"))
+        if lam:
+            h["LAMBDA"] = (round(lam, 2), "[A] mean wavelength of the layer")
         if len(zs) == 1:
             h["ZSPACE"] = int(float(zs[0]))
         elif len(zs) > 1 and "ZSPACE" in h:
@@ -2064,7 +2072,7 @@ def write_cont_products(linecont_path: Path, prods: dict, *, write_total: bool =
                 h["ZMEAN"] = (round(zm_all, 3), "Mean zenith distance [deg], airmass weighted")
             elif "ZMEAN" in h:
                 del h["ZMEAN"]
-            zall = [z for i in idx for z in str(prods["layers"][i].get("zspace") or "").split(";") if z]
+            zall = [z for i in idx for z in _layer_zspaces(prods["layers"][i])]
             if "ZSPACE" in h and len(set(zall)) > 1:
                 del h["ZSPACE"]
         if texp:

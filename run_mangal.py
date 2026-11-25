@@ -191,7 +191,11 @@ def _apply_ergs_stage(args, w_dir: Path, r_dir: Path, exp_filter, object_name: s
         except Exception:
             exp_filter = None
 
-    erg_json = Path(args.ergcal_json) if args.ergcal_json else _find_latest_json(r_dir.parent, filter_name=exp_filter)
+    if args.ergcal_json:
+        erg_json = Path(args.ergcal_json)
+    else:  # the calibration of THIS night (nights lying side by side must not mix), else the newest one
+        from mangal_combine import find_night_qe_json
+        erg_json = find_night_qe_json(r_dir, exp_filter) or _find_latest_json(r_dir.parent, filter_name=exp_filter)
     if erg_json is None or not Path(erg_json).exists():
         raise FileNotFoundError("No QE_*.json calibration file found. Run a standard star with --qe-calib first or pass --ergcal-json.")
 
@@ -305,6 +309,21 @@ def _parse_protect(text):
     except ValueError:
         v = []
     return (v[0], v[1], v[2]) if len(v) == 3 else None
+
+
+def _combine_stage(args, w_dir: Path, hints) -> Path:
+    """Combine this night's linecont cube with those of --combine-with; returns the folder of the result."""
+    from mangal_combine import combine_nights
+    ref_lc = _locate_linecont(w_dir, args.object_name, hints)
+    if ref_lc is None:
+        raise FileNotFoundError(f"Combination of nights needs <object>_linecont.fits in {w_dir}: run line+cont first")
+    out_dir = Path(args.combine_out) if args.combine_out else w_dir.parent / f"{args.object_name}_combined"
+    others = [Path(d) for d in args.combine_with]
+    if any(d.resolve() == w_dir.resolve() for d in others):
+        raise SystemExit("--combine-with must list the W_DIRs of the OTHER nights, not this one")
+    out = combine_nights(w_dir, others, out_dir, object_name=args.object_name, scale=args.combine_scale,
+                         manual=bool(args.combine_manual), ref_linecont=ref_lc)
+    return out.parent
 
 
 def _run_step7(args, params: dict, w_dir: Path, hints) -> None:
@@ -474,6 +493,18 @@ def main(argv=None) -> int:
 
     ap.add_argument("--standard", action="store_true", help="Treat this run as standard star: skip continuum subtraction and astrometry")
 
+    # combination of nights (between line+cont and net)
+    ap.add_argument("--combine-with", nargs="+", default=None, metavar="W_DIR",
+                    help="W_DIR(s) of the same object reduced on other nights (up to line+cont): their linecont cubes are "
+                         "registered to this night, scaled and averaged; net / astro / apply-ergs then work on the result")
+    ap.add_argument("--combine-out", default=None,
+                    help="Folder for the combined cube (default: <W_DIR>/../<object>_combined)")
+    ap.add_argument("--combine-scale", choices=["both", "stars", "standards"], default="both",
+                    help="Flux scale between nights: field stars, QE calibrations of the nights, or both "
+                         "(stars, with the standard-star ratio reported; standards if too few stars)")
+    ap.add_argument("--combine-manual", action="store_true",
+                    help="Click the star pairs for every night instead of the automatic match")
+
     # step5: diagnostics outputs
     ap.add_argument("--save-per-star", action="store_true", help="Also save per-star table")
     ap.add_argument("--qe-calib", action="store_true", help="Compute QE and erg calibration from a processed standard star")
@@ -501,7 +532,9 @@ def main(argv=None) -> int:
     # no log, no raw data, no other earlier steps.
     _earlier = (args.prepare_calib or args.cr or args.shift or args.phot or args.linecont
                 or args.qe_calib)
-    if (args.net or args.astro or args.apply_ergs) and not _earlier and not getattr(args, "standard", False):
+    if (args.net or args.astro or args.apply_ergs or args.combine_with) and not _earlier and not getattr(args, "standard", False):
+        if args.combine_with:
+            w_dir = _combine_stage(args, w_dir, [])
         if args.net or args.astro:
             _run_step7(args, params, w_dir, [])
         if args.apply_ergs:
@@ -856,10 +889,16 @@ def main(argv=None) -> int:
         print(f"[OK] erg cal:  {qe['qe_json']}")
         print(f"[OK] median mul [ADU/s -> erg/s/cm2]: {qe['median_mul_adu_to_erg']:.6e}")
 
+    # Combination of nights: the linecont cubes of the other nights are added to this one; the later stages
+    # (net, astrometry, ergs) work in the folder of the combined cube
+    _hint = [Path(outp)] if ("outp" in locals() and outp is not None) else []
+    _hint.append(stage_path(final_cube, "linecont"))
+    if args.combine_with and not getattr(args, "standard", False):
+        w_dir = _combine_stage(args, w_dir, _hint)
+        _hint = []
+
     # Step7: continuum subtraction and astrometry
     if (args.net or args.astro) and not getattr(args, "standard", False):
-        _hint = [Path(outp)] if ("outp" in locals() and outp is not None) else []
-        _hint.append(stage_path(final_cube, "linecont"))
         _run_step7(args, params, w_dir, _hint)
 
     if args.apply_ergs and (not getattr(args, "standard", False)):

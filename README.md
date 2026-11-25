@@ -130,6 +130,7 @@ Other keys (`BINNING`, `NIGHT`, `NO_SHIFT`, …) are accepted and ignored.
 | 4 | `--shift` | registration of the frames by reference stars | `<obj>_shift.fits` |
 | 5 | `--phot` | photometry of the stars, rejection of frames with bad transparency / seeing | `<obj>_phot.fits` |
 | 6 | `--linecont` | sum of the frames into emission-line and continuum layers | `<obj>_linecont.fits` |
+| 6½ | `--combine-with` | combination with the same object reduced on other nights | `<obj>_combined/<obj>_linecont.fits` |
 | 7 | `--net` | continuum subtraction `net = line − k·cont` | `<obj>_<line>_net.fits` |
 | 7 | `--astro` | astrometry (astrometry.net), rotation to North up / East left | `*_NE.fits` |
 | 8 | `--qe-calib` | QE / flux calibration from a standard star | `QE_*.json` |
@@ -155,6 +156,33 @@ contain the ZSPACE values of every merged cube; frames with an unknown ZSPACE ar
 One master dark and one master flat are used, so the cubes must have the **same filter and exposure time**;
 otherwise the run stops and lists the filter / exposure of every cube. Process such cubes one by one
 (tick one cube, or give one value of `CUB_OBJ`) with a different `write_dir` for each.
+
+### Several nights
+
+An object observed on different nights is reduced **night by night up to line+cont** (own darks, flat, shift,
+frame selection, ZSPACE log), then the line+cont cubes are combined as if they were one night:
+
+```bash
+python run_mangal.py --param PGC45443_auto.txt --object PGC45443 \
+    --combine-with /data/t261020/PGC45443 --net --auto-mul-cont --astro --apply-ergs
+```
+
+- The night of `--param` is the reference; the cubes of `--combine-with` (their `write_dir`) are registered to it by
+  the field stars with an affine transformation. Any rotation is found automatically; if the match fails, or with
+  `--combine-manual`, a window asks for pairs of the same star (left: reference, right: other night; right click =
+  undo, Enter = done). The clicked pairs are a first guess, refined with all stars.
+- Flux scale of every night to the reference (`--combine-scale`): `stars` (median flux ratio of the field stars,
+  includes the transparency), `standards` (ratio of the QE calibrations of the nights), `both` (default: stars, with the
+  standard-star ratio printed for comparison; standards if there are too few stars).
+- Layers with the same name (`Ha`, `NII`, `cont1`, …) are averaged with the exposure as weight. ZSPACE values of
+  different nights are not comparable, so every layer gets its mean wavelength `LLAMn` (from the `.calib` file of
+  each night); the 2D products carry it as `LAMBDA`. Exposures, frame numbers and the zenith distance are combined.
+- The result goes to `<write_dir>/../<obj>_combined/` with a report `<obj>_linecont.nights.csv` (transformation,
+  scale factors of every night); net, astrometry and apply ergs work there as usual, with the QE calibration of the
+  reference night.
+
+In the GUI: tick *combine nights* and add the `write_dir` of the other nights with *+ night*.
+The QE calibration of every night is found by its `.calib` file, so the folders of different nights may lie side by side.
 
 ### 1–3. Dark, flat, cosmic rays, background
 
@@ -304,6 +332,7 @@ with `--background-mode none`: run step 1 again to subtract the background.
 | `mangal_step5_photometry.py` | star photometry, frame selection |
 | `mangal_step6_linecont.py` | line / continuum cube |
 | `mangal_step7_net_astro.py` | continuum subtraction (incl. continuum registration and per-star match), astrometry |
+| `mangal_combine.py` | combination of nights |
 | `mangal_step8_ergcal.py` | QE and flux calibration |
 | `mangal_standards.py` | list of spectrophotometric standards |
 | `mangal_header.py`, `mangal_names.py` | FITS header keywords, file naming |

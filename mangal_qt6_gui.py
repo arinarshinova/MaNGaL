@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QGridLayout,
     QGroupBox,
+    QListWidget,
 )
 from PyQt6.QtCore import QLocale, Qt
 from PyQt6.QtGui import QStandardItem
@@ -231,6 +232,17 @@ class MangalQt(QWidget):
         self.chk_qe = QCheckBox("QE calibration")
         self.chk_apply_ergs = QCheckBox("apply ergs")
         self.chk_standard = QCheckBox("standard")
+        self.chk_combine = QCheckBox("combine nights")
+
+        # combination of nights: W_DIRs of the same object reduced (up to line+cont) on other nights
+        self.combine_list = QListWidget()
+        self.combine_list.setMaximumHeight(70)
+        self.combine_list.setToolTip("write_dir of the same object on other nights (reduced up to line+cont)")
+        self.btn_combine_add = QPushButton("+ night")
+        self.btn_combine_del = QPushButton("− remove")
+        self.combine_scale_combo = QComboBox()
+        self.combine_scale_combo.addItems(["both", "stars", "standards"])
+        self.chk_combine_manual = QCheckBox("manual star pairs")
 
         self.chk_prepare_cube.setChecked(True)
         self.chk_shift.setChecked(True)
@@ -393,6 +405,7 @@ class MangalQt(QWidget):
         col1.addWidget(self.chk_shift)
         col1.addWidget(self.chk_phot_auto)
         col2.addWidget(self.chk_linecont)
+        col2.addWidget(self.chk_combine)
         col2.addWidget(self.chk_net)
         col2.addWidget(self.chk_astro)
         col3.addWidget(self.chk_standard)
@@ -460,6 +473,17 @@ class MangalQt(QWidget):
         params_grid.addWidget(shift_box, 0, 1)
         params_grid.addWidget(net_box, 0, 2)
         params_grid.addWidget(phot_box, 1, 0, 1, 3)
+
+        combine_box = QGroupBox("combine nights (write_dir of the other nights, after line+cont)")
+        grid_comb = QGridLayout(combine_box)
+        grid_comb.addWidget(self.combine_list, 0, 0, 3, 1)
+        grid_comb.addWidget(self.btn_combine_add, 0, 1)
+        grid_comb.addWidget(self.btn_combine_del, 1, 1)
+        grid_comb.addWidget(QLabel("scale"), 0, 2)
+        grid_comb.addWidget(self.combine_scale_combo, 0, 3)
+        grid_comb.addWidget(self.chk_combine_manual, 1, 2, 1, 2)
+        grid_comb.setColumnStretch(0, 1)
+        params_grid.addWidget(combine_box, 2, 0, 1, 3)
         for col in range(3):
             params_grid.setColumnStretch(col, 1)
         layout.addLayout(params_grid)
@@ -477,6 +501,8 @@ class MangalQt(QWidget):
         self.standard_combo.currentIndexChanged.connect(self._sync_wdir_for_mode)
         self.chk_standard.toggled.connect(self._on_standard_toggled)
         self.btn_run.clicked.connect(self.run_pipeline)
+        self.btn_combine_add.clicked.connect(self._add_combine_night)
+        self.btn_combine_del.clicked.connect(self._remove_combine_night)
 
     def _on_object_or_cube_changed(self):
         self.update_cubes_for_object()
@@ -489,6 +515,7 @@ class MangalQt(QWidget):
             self.chk_phot_auto.setChecked(True)
             self.chk_linecont.setChecked(True)
             # not applicable to a standard star
+            self.chk_combine.setChecked(False)
             self.chk_net.setChecked(False)
             self.chk_astro.setChecked(False)
             self.chk_apply_ergs.setChecked(False)
@@ -853,7 +880,45 @@ class MangalQt(QWidget):
         if self.chk_astro.isChecked():
             args.append("--astro")
 
+        nights = self._combine_nights()
+        if self.chk_combine.isChecked() and not standard_mode:
+            if nights:
+                args += ["--combine-with", *nights,
+                         "--combine-out", str(self._combine_out_dir(Path(self.wdir_edit.text().strip()),
+                                                                    self._current_object_name())),
+                         "--combine-scale", self.combine_scale_combo.currentText()]
+                if self.chk_combine_manual.isChecked():
+                    args.append("--combine-manual")
+            else:
+                self.log("[warn] combine nights is ticked, but no other night is listed: + night")
         return args
+
+    # ---------------------------------------------------------------- combination of nights
+    @staticmethod
+    def _combine_out_dir(w_dir: Path, object_name: str) -> Path:
+        return w_dir.parent / f"{object_name}_combined"
+
+    def _combine_nights(self) -> list[str]:
+        return [self.combine_list.item(i).text() for i in range(self.combine_list.count())]
+
+    def _add_combine_night(self):
+        start = self.wdir_edit.text().strip() or self.rdir_edit.text().strip() or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "write_dir of the object on another night", str(Path(start).parent))
+        if not d:
+            return
+        if d in self._combine_nights():
+            return
+        if Path(d).resolve() == Path(self.wdir_edit.text().strip() or ".").resolve():
+            self.log("[warn] this is the write_dir of the current night: choose the folder of ANOTHER night")
+            return
+        if not list(Path(d).glob("*_linecont.fits")):
+            self.log(f"[warn] no *_linecont.fits in {d}: reduce that night up to line+cont first")
+        self.combine_list.addItem(d)
+        self.chk_combine.setChecked(True)
+
+    def _remove_combine_night(self):
+        for it in self.combine_list.selectedItems():
+            self.combine_list.takeItem(self.combine_list.row(it))
 
     def _resolve_target(self):
         rdir_text = self.rdir_edit.text().strip()
@@ -1094,7 +1159,10 @@ class MangalQt(QWidget):
         if self.chk_phot_auto.isChecked():
             self._show_photometry_products(w_dir)
         if ret == 0 and (not standard_mode) and self.chk_net.isChecked():
-            self._show_subtraction_products(w_dir, t_start)
+            prod_dir = w_dir
+            if self.chk_combine.isChecked() and self._combine_nights():  # net was made from the combined cube
+                prod_dir = self._combine_out_dir(w_dir, target_name)
+            self._show_subtraction_products(prod_dir, t_start)
         if ret == 0 and standard_mode and self.chk_qe.isChecked():
             self._show_qe_products(w_dir, t_start)
         return ret
