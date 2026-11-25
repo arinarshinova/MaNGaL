@@ -31,8 +31,8 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QToolButton,
 )
-from PyQt6.QtCore import QLocale, Qt
-from PyQt6.QtGui import QStandardItem
+from PyQt6.QtCore import QLocale, QSize, Qt
+from PyQt6.QtGui import QFont, QStandardItem
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -217,7 +217,8 @@ class CollapsibleBox(QWidget):
         self.toggle.setCheckable(True)
         self.toggle.setChecked(expanded)
         self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; }")
+        self.toggle.setIconSize(QSize(8, 8))  # small arrow
+        self.toggle.setStyleSheet("QToolButton { border: none; }")
         self.content = content
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -226,6 +227,10 @@ class CollapsibleBox(QWidget):
         lay.addWidget(self.content)
         self.toggle.toggled.connect(self._set_expanded)
         self._set_expanded(expanded)
+
+    def set_title(self, title: str):
+        self._title = title
+        self.toggle.setText(title)
 
     def _set_expanded(self, on: bool):
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
@@ -259,7 +264,7 @@ class MangalQt(QWidget):
         self.chk_qe = QCheckBox("QE calibration")
         self.chk_apply_ergs = QCheckBox("apply ergs")
         self.chk_standard = QCheckBox("standard")
-        self.chk_combine = QCheckBox("combine nights")
+        self.chk_combine = QCheckBox("combine this night with the nights below")
 
         # combination of nights: W_DIRs of the same object reduced (up to line+cont) on other nights
         self.combine_list = QListWidget()
@@ -434,7 +439,6 @@ class MangalQt(QWidget):
         col1.addWidget(self.chk_shift)
         col1.addWidget(self.chk_phot_auto)
         col2.addWidget(self.chk_linecont)
-        col2.addWidget(self.chk_combine)
         col2.addWidget(self.chk_net)
         col2.addWidget(self.chk_astro)
         col3.addWidget(self.chk_standard)
@@ -506,16 +510,22 @@ class MangalQt(QWidget):
         self.phot_panel = CollapsibleBox("photometry parameters", phot_box, expanded=False)
         params_grid.addWidget(self.phot_panel, 1, 0, 1, 3)
 
-        combine_box = QGroupBox("combine nights (write_dir of the other nights, after line+cont)")
+        combine_box = QGroupBox()
         grid_comb = QGridLayout(combine_box)
-        grid_comb.addWidget(self.combine_list, 0, 0, 3, 1)
-        grid_comb.addWidget(self.btn_combine_add, 0, 1)
-        grid_comb.addWidget(self.btn_combine_del, 1, 1)
-        grid_comb.addWidget(QLabel("scale"), 0, 2)
-        grid_comb.addWidget(self.combine_scale_combo, 0, 3)
-        grid_comb.addWidget(self.chk_combine_manual, 1, 2, 1, 2)
+        grid_comb.addWidget(self.chk_combine, 0, 0, 1, 4)
+        grid_comb.addWidget(QLabel("write_dir of the same object on other nights (reduced up to line+cont):"), 1, 0, 1, 4)
+        grid_comb.addWidget(self.combine_list, 2, 0, 3, 1)
+        grid_comb.addWidget(self.btn_combine_add, 2, 1)
+        grid_comb.addWidget(self.btn_combine_del, 3, 1)
+        grid_comb.addWidget(QLabel("scale"), 2, 2)
+        grid_comb.addWidget(self.combine_scale_combo, 2, 3)
+        grid_comb.addWidget(self.chk_combine_manual, 3, 2, 1, 2)
         grid_comb.setColumnStretch(0, 1)
-        params_grid.addWidget(combine_box, 2, 0, 1, 3)
+        # used rarely: folded away; the title shows when it is switched on
+        self.combine_panel = CollapsibleBox("combine nights", combine_box, expanded=False)
+        params_grid.addWidget(self.combine_panel, 2, 0, 1, 3)
+        self.chk_combine.toggled.connect(
+            lambda on: self.combine_panel.set_title("combine nights — ON" if on else "combine nights"))
         for col in range(3):
             params_grid.setColumnStretch(col, 1)
         layout.addLayout(params_grid)
@@ -1234,6 +1244,12 @@ class MangalQt(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    # one font size everywhere (on macOS Qt otherwise uses smaller fonts for some widgets: tool buttons, lists,
+    # spin boxes ...)
+    base = QFont(app.font())
+    size = base.pointSizeF() if base.pointSizeF() > 0 else 13.0
+    app.setFont(base)
+    app.setStyleSheet(f"* {{ font-size: {size:g}pt; }}")
     w = MangalQt()
     w.show()
     sys.exit(app.exec())

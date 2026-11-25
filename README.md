@@ -62,7 +62,7 @@ python mangal_qt6_gui.py
 2. Choose the **object** and its **cube(s)**; **write_dir** defaults to `<night>/../<object>`.
    All cubes of the object are ticked by default and are merged into one (see [Several cubes](#several-cubes)).
 3. Tick the stages to run and adjust their parameters (shift, photometry, continuum subtraction);
-   the photometry parameters are folded away: click their title to open them.
+   the photometry parameters and the rarely used *combine nights* are folded away: click their title to open them.
 4. Press **run**. The log is shown in the window; the photometry plots and the subtraction
    pictures (`*_net_subtract.png`) are opened when the corresponding stages finish.
 
@@ -187,7 +187,8 @@ python run_mangal.py --param PGC45443_auto.txt --object PGC45443 \
 - The headers of all products list the nights: `NNIGHTS`, `NIGHT0`, `NIGHT1`, … (night folder and date),
   `NSCALE1`, … (scale factor of every night), and `HISTORY` lines with the transformations.
 
-In the GUI: tick *combine nights* and add the `write_dir` of the other nights with *+ night*.
+In the GUI: open the folded panel *combine nights* (click its title), tick *combine this night with the nights below*
+and add the `write_dir` of the other nights with *+ night*; the panel title shows *ON* while it is switched on.
 The QE calibration of every night is found by its `.calib` file, so the folders of different nights may lie side by side.
 
 ### 1–3. Dark, flat, cosmic rays, background
