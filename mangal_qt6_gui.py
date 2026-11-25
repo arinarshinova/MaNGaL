@@ -473,6 +473,17 @@ class MangalQt(QWidget):
         grid_bg.addWidget(self.bg_window_spin, 1, 1)
         grid_bg.addWidget(QLabel("center exclusion r: from shift"), 2, 0, 1, 2)
 
+        # line+cont: frames left out of the sum by hand (satellite tracks the photometry does not catch)
+        self.lc_exclude_edit = QLineEdit()
+        self.lc_exclude_edit.setPlaceholderText("e.g. 1005, 1210-1212")
+        self.lc_exclude_edit.setToolTip(
+            "Frames NOT summed at line+cont (e.g. satellite tracks): numbers CCNN of the observation log "
+            "(cube CC, frame NN), ranges with '-'. The slice report <obj>_linecont.csv lists the file of every slice.")
+        lc_box = QGroupBox("line+cont")
+        grid_lc = QGridLayout(lc_box)
+        grid_lc.addWidget(QLabel("exclude frames"), 0, 0)
+        grid_lc.addWidget(self.lc_exclude_edit, 0, 1)
+
         net_box = QGroupBox("net parameters")
         grid_net = QGridLayout(net_box)
         grid_net.addWidget(QLabel("mul[1]"), 0, 0)
@@ -505,7 +516,12 @@ class MangalQt(QWidget):
 
         params_grid.addWidget(bg_box, 0, 0)
         params_grid.addWidget(shift_box, 0, 1)
-        params_grid.addWidget(net_box, 0, 2)
+        col_right = QWidget()
+        lay_right = QVBoxLayout(col_right)
+        lay_right.setContentsMargins(0, 0, 0, 0)
+        lay_right.addWidget(lc_box)
+        lay_right.addWidget(net_box)
+        params_grid.addWidget(col_right, 0, 2)
         # changed rarely: folded away by default (click the title to open)
         self.phot_panel = CollapsibleBox("photometry parameters", phot_box, expanded=False)
         params_grid.addWidget(self.phot_panel, 1, 0, 1, 3)
@@ -908,6 +924,9 @@ class MangalQt(QWidget):
             args.append("--apply-ergs")
         if self.chk_linecont.isChecked():
             args.append("--linecont")
+            excl = self.lc_exclude_edit.text().strip()
+            if excl:
+                args += ["--lc-exclude-frames", excl]
         if self.chk_net.isChecked():
             args += [
                 "--net",

@@ -108,12 +108,53 @@ def _slice_meta_from_source_cube(source_cube_path: str | Path) -> pd.DataFrame:
     return df.drop(columns=[c for c in (zcol, ecol) if c not in ("ZSPACE", "EXPTIME")]).copy()
 
 
+def frame_id(file_name) -> str | None:
+    """'t260417_1005' / 't260417_1005.fts' -> '1005' (cube + frame number of the observation log)."""
+    m = re.search(r"_(\d{4})(?:\.f\w*)?$", str(file_name).strip())
+    return m.group(1) if m else None
+
+
+def parse_frame_list(spec) -> tuple[set[str], list[str]]:
+    """
+    Frames given by hand: '1005, 1210-1212, t260417_0815' -> ({'1005', '1210', '1211', '1212', '0815'}, []).
+    Numbers are CCNN of the observation log (cube CC, frame NN). Returns (ids, tokens that were not understood).
+    """
+    ids, bad = set(), []
+    if spec is None:
+        return ids, bad
+    toks = spec if isinstance(spec, (list, tuple, set)) else re.split(r"[,\s;]+", str(spec))
+    for t in toks:
+        t = str(t).strip()
+        if not t:
+            continue
+        m = re.fullmatch(r"(\d{3,4})-(\d{3,4})", t)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if b < a or b - a > 500:
+                bad.append(t)
+                continue
+            ids.update(f"{n:04d}" for n in range(a, b + 1))
+            continue
+        if re.fullmatch(r"\d{3,4}", t):
+            ids.add(f"{int(t):04d}")
+            continue
+        fid = frame_id(t)
+        if fid:
+            ids.add(fid)
+        else:
+            bad.append(t)
+    return ids, bad
+
+
 def _write_linecont_product(out_path: Path, hdr, layer_imgs: list, layers: list[dict],
                             *, tline: float, tcont: float, source_name: str,
-                            labels, kinds, zspaces, good_mask, used, slice_groups=None, frames=None):
+                            labels, kinds, zspaces, good_mask, used, slice_groups=None, frames=None,
+                            excluded=None, excluded_files=None):
     """Write the multi-layer cube (one layer per entry of `layers`) and the per-slice report."""
     out_cube = np.stack(layer_imgs, axis=0).astype(np.float32)
     out_hdr = hdr.copy()
+    if excluded_files:
+        out_hdr["HISTORY"] = "STEP6: frames excluded by hand: " + ", ".join(excluded_files)
     out_hdr["HISTORY"] = f"STEP6: line/cont layers from {source_name}"
     out_hdr["HISTORY"] = "STEP6: normalized by total EXPTIME per layer (counts/sec)"
     out_hdr["HISTORY"] = "STEP6: layers: " + ", ".join(str(L["name"]) for L in layers)
@@ -130,11 +171,14 @@ def _write_linecont_product(out_path: Path, hdr, layer_imgs: list, layers: list[
 
     rep = {
         "slice": np.arange(len(zspaces), dtype=int),
+        "FILE": (frames["FILE"].astype(str).tolist() if frames is not None and "FILE" in frames.columns
+                 else [""] * len(zspaces)),
         "ZSPACE": zspaces,
         "label": labels,
         "kind": kinds,
         "good_phot": np.asarray(good_mask, dtype=int),
         "used": np.asarray(used, dtype=int),
+        "excluded_by_hand": np.asarray(excluded if excluded is not None else np.zeros(len(zspaces)), dtype=int),
     }
     if slice_groups is not None:
         rep["group"] = slice_groups
@@ -186,6 +230,7 @@ def build_linecont_cube(
     phot_table_path: str | Path | None = None,
     split_groups: bool = True,
     group_by: str = "zspace",
+    exclude_frames=None,
 ) -> Path:
     """
     Build the multi-layer line/continuum cube (counts/sec):
@@ -198,6 +243,8 @@ def build_linecont_cube(
     The layer table is stored in the header (NLAYERS, LAYERn, LKINDn, LROLEn, LTAGn, LZSPn, LTEXPn) and
     is what step7 uses to pick the layers. Uses ZSPACE per slice from the sidecar of source_cube_path
     and the mapping from zspace_log_path; if phot_table_path is given, only slices with good==1.
+    exclude_frames: frames left out by hand (e.g. satellite tracks the photometry did not catch), as CCNN numbers of
+    the observation log: "1005, 1210-1212" or file names.
     """
     cube, hdr = _read_cube_and_hdr(cube_path)
     meta_full = _slice_meta_from_source_cube(source_cube_path)
@@ -244,6 +291,24 @@ def build_linecont_cube(
 
     zmap = parse_zspace_log(zspace_log_path)
 
+    # frames excluded by hand
+    excl_ids, excl_bad = parse_frame_list(exclude_frames)
+    slice_ids = [frame_id(f) for f in frames["FILE"]] if "FILE" in frames.columns else [None] * len(zspaces)
+    excluded = [sid is not None and sid in excl_ids for sid in slice_ids]
+    excluded_files = [str(frames["FILE"].iloc[i]) for i in range(len(excluded)) if excluded[i]]
+    if excl_ids or excl_bad:
+        all_ids = {frame_id(f) for f in meta_full["FILE"]} if "FILE" in meta_full.columns else set()
+        in_cube = {s for s in slice_ids if s}
+        rejected = sorted(i for i in excl_ids if i in all_ids and i not in in_cube)
+        unknown = sorted(i for i in excl_ids if i not in all_ids)
+        print(f"[linecont] excluded by hand: {len(excluded_files)} frame(s)"
+              + (f" ({', '.join(excluded_files)})" if excluded_files else ""), flush=True)
+        if rejected:
+            print(f"[linecont] already rejected by the photometry: {', '.join(rejected)}", flush=True)
+        if unknown or excl_bad:
+            print(f"[linecont] WARNING: not frames of this cube: {', '.join(unknown + excl_bad)} "
+                  f"(numbers are CCNN of the observation log, e.g. 1005 or 1210-1212)", flush=True)
+
     labels = []
     kinds = []
     used = []
@@ -252,7 +317,7 @@ def build_linecont_cube(
         kind = classify_label(label) if label != "" else "unknown"
         labels.append(label)
         kinds.append(kind)
-        used.append(bool(good_mask[i]) and kind in ("line", "cont"))
+        used.append(bool(good_mask[i]) and kind in ("line", "cont") and not excluded[i])
     nolabel = sorted({int(z) for z, lab in zip(zspaces, labels) if lab == ""})
     if nolabel:
         n = sum(1 for lab in labels if lab == "")
@@ -325,6 +390,6 @@ def build_linecont_cube(
         out_path, hdr, layer_imgs, layers,
         tline=tline, tcont=tcont, source_name=Path(cube_path).name,
         labels=labels, kinds=kinds, zspaces=zspaces, good_mask=good_mask, used=used,
-        slice_groups=slice_groups, frames=frames,
+        slice_groups=slice_groups, frames=frames, excluded=excluded, excluded_files=excluded_files,
     )
     return out_path

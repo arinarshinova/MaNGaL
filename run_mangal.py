@@ -447,6 +447,9 @@ def main(argv=None) -> int:
     ap.add_argument("--upsample", type=int, default=10, help="Subpixel upsample factor for phase correlation")
     ap.add_argument("--shift-detect-snr", type=float, default=20.0, help="Detection threshold in robust sigma units for shift reference stars")
     ap.add_argument("--shift-search-half", type=int, default=30, help="Half-size of search window around previous-frame star position")
+    ap.add_argument("--lc-exclude-frames", default="",
+                    help="line+cont: frames left out of the sum by hand (e.g. satellite tracks), as numbers CCNN of the "
+                         "observation log: \"1005, 1210-1212\" (or file names)")
     ap.add_argument("--shift-manual-pairs", action="store_true",
                     help="Merged cubes: click star pairs to register every other cube to the reference frame "
                          "(otherwise automatic, with the window only when that fails)")
@@ -867,6 +870,7 @@ def main(argv=None) -> int:
             phot_table_path=phot_path,
             split_groups=not args.no_lc_split,
             group_by=args.lc_group_by,
+            exclude_frames=args.lc_exclude_frames,
         )
         _print_layers(outp)
 
