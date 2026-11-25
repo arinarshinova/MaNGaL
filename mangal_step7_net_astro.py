@@ -317,8 +317,16 @@ def _make_upload_image(cont_fits: Path) -> Path:
     h["UPY0"] = (int(y0), "y offset of this cut in the original image")
     # temporary file (deleted after the solve): nothing extra is left in W_DIR
     outp = Path(tempfile.mkdtemp(prefix="mangal_astro_")) / (cont_fits.stem + "_astro_upload.fits")
-    fits.PrimaryHDU(sub, header=h).writeto(outp, overwrite=True)
+    fits.PrimaryHDU(_to_int16_for_upload(sub), header=h).writeto(outp, overwrite=True)
     return outp
+
+
+def _to_int16_for_upload(img: np.ndarray) -> np.ndarray:
+    """16-bit copy for the upload (half the size of float32; plenty for finding stars): sky .. bright stars -> 0 .. 32000."""
+    lo, hi = np.percentile(img, [0.5, 99.995])
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return img.astype(np.float32)
+    return (np.clip((img - lo) / (hi - lo), 0.0, 1.0) * 32000.0).astype(np.int16)
 
 
 def _hints_from_header(hdr) -> AstroHints:
@@ -1763,10 +1771,36 @@ def solve_astrometry_net(cont_fits: Path,
     base_url = "https://nova.astrometry.net"
     api_url = base_url + "/api"
 
-    def _post_json(endpoint: str, payload: dict, files=None, timeout=120):
+    import time as _time
+
+    def _post_json(endpoint: str, payload: dict, file_path: Path | None = None, timeout=120):
+        """
+        POST with retries: nova.astrometry.net sometimes drops the connection ('Connection reset by peer') or answers
+        5xx; the request is repeated up to max_retries times with a growing pause.
+        """
         # the API expects form field: request-json=<json-string>
         data = {"request-json": json.dumps(payload)}
-        return requests.post(api_url + endpoint, data=data, files=files, timeout=timeout)
+        wait = float(retry_wait_s)
+        for attempt in range(1, max_retries + 1):
+            try:
+                if file_path is not None:
+                    with open(file_path, "rb") as f:  # reopened at every attempt
+                        r = requests.post(api_url + endpoint, data=data, timeout=timeout,
+                                          files={"file": (Path(file_path).name, f, "application/fits")})
+                else:
+                    r = requests.post(api_url + endpoint, data=data, timeout=timeout)
+                if r.status_code >= 500:
+                    raise requests.HTTPError(f"server error {r.status_code}", response=r)
+                return r
+            except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+                if attempt == max_retries:
+                    raise RuntimeError(f"astrometry.net {endpoint}: no answer after {max_retries} attempts "
+                                       f"(last error: {type(e).__name__}: {e}). Check the internet connection "
+                                       f"or try again later.") from e
+                print(f"[astro] {endpoint}: {type(e).__name__} ({e}); attempt {attempt}/{max_retries} failed, "
+                      f"retrying in {wait:.0f} s", flush=True)
+                _time.sleep(wait)
+                wait = min(wait * 2, 120.0)
 
     def _get(endpoint: str, timeout=120):
         return requests.get(api_url + endpoint, timeout=timeout)
@@ -1797,9 +1831,7 @@ def solve_astrometry_net(cont_fits: Path,
     if parity is not None:
         settings["parity"] = int(parity)
 
-    with open(cont_fits, "rb") as f:
-        files = {"file": (cont_fits.name, f, "application/fits")}
-        r = _post_json("/upload", settings, files=files, timeout=300)
+    r = _post_json("/upload", settings, file_path=cont_fits, timeout=300)
     r.raise_for_status()
     j = r.json()
     if j.get("status") != "success":
@@ -1807,7 +1839,6 @@ def solve_astrometry_net(cont_fits: Path,
     subid = int(j["subid"])
 
     # --- poll for job id + status ---
-    import time as _time
     start = _time.time()
     job_id: int | None = None
     status = None
