@@ -108,42 +108,25 @@ def _slice_meta_from_source_cube(source_cube_path: str | Path) -> pd.DataFrame:
     return df.drop(columns=[c for c in (zcol, ecol) if c not in ("ZSPACE", "EXPTIME")]).copy()
 
 
-def frame_id(file_name) -> str | None:
-    """'t260417_1005' / 't260417_1005.fts' -> '1005' (cube + frame number of the observation log)."""
-    m = re.search(r"_(\d{4})(?:\.f\w*)?$", str(file_name).strip())
-    return m.group(1) if m else None
-
-
-def parse_frame_list(spec) -> tuple[set[str], list[str]]:
+def parse_slice_list(spec, nslices: int) -> tuple[list[int], list[str]]:
     """
-    Frames given by hand: '1005, 1210-1212, t260417_0815' -> ({'1005', '1210', '1211', '1212', '0815'}, []).
-    Numbers are CCNN of the observation log (cube CC, frame NN). Returns (ids, tokens that were not understood).
+    Slices of the cube given by hand, 1-based as in DS9: '5, 12-14' -> ([4, 11, 12, 13], []) (0-based).
+    Returns (indices, tokens that are not understood or outside 1..nslices).
     """
-    ids, bad = set(), []
-    if spec is None:
-        return ids, bad
-    toks = spec if isinstance(spec, (list, tuple, set)) else re.split(r"[,\s;]+", str(spec))
-    for t in toks:
-        t = str(t).strip()
+    idx, bad = set(), []
+    for t in re.split(r"[,;\s]+", str(spec or "").strip()):
         if not t:
             continue
-        m = re.fullmatch(r"(\d{3,4})-(\d{3,4})", t)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2))
-            if b < a or b - a > 500:
-                bad.append(t)
-                continue
-            ids.update(f"{n:04d}" for n in range(a, b + 1))
-            continue
-        if re.fullmatch(r"\d{3,4}", t):
-            ids.add(f"{int(t):04d}")
-            continue
-        fid = frame_id(t)
-        if fid:
-            ids.add(fid)
-        else:
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?", t)
+        if not m:
             bad.append(t)
-    return ids, bad
+            continue
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        if lo < 1 or hi < lo or hi > nslices:
+            bad.append(t)
+            continue
+        idx.update(range(lo - 1, hi))
+    return sorted(idx), bad
 
 
 def _write_linecont_product(out_path: Path, hdr, layer_imgs: list, layers: list[dict],
@@ -154,7 +137,7 @@ def _write_linecont_product(out_path: Path, hdr, layer_imgs: list, layers: list[
     out_cube = np.stack(layer_imgs, axis=0).astype(np.float32)
     out_hdr = hdr.copy()
     if excluded_files:
-        out_hdr["HISTORY"] = "STEP6: frames excluded by hand: " + ", ".join(excluded_files)
+        out_hdr["HISTORY"] = "STEP6: slices excluded by hand: " + ", ".join(excluded_files)
     out_hdr["HISTORY"] = f"STEP6: line/cont layers from {source_name}"
     out_hdr["HISTORY"] = "STEP6: normalized by total EXPTIME per layer (counts/sec)"
     out_hdr["HISTORY"] = "STEP6: layers: " + ", ".join(str(L["name"]) for L in layers)
@@ -170,7 +153,7 @@ def _write_linecont_product(out_path: Path, hdr, layer_imgs: list, layers: list[
     fits.writeto(out_path, out_cube, out_hdr, overwrite=True)
 
     rep = {
-        "slice": np.arange(len(zspaces), dtype=int),
+        "slice": np.arange(1, len(zspaces) + 1, dtype=int),  # 1-based, as in DS9 and for --lc-exclude-frames
         "FILE": (frames["FILE"].astype(str).tolist() if frames is not None and "FILE" in frames.columns
                  else [""] * len(zspaces)),
         "ZSPACE": zspaces,
@@ -243,8 +226,8 @@ def build_linecont_cube(
     The layer table is stored in the header (NLAYERS, LAYERn, LKINDn, LROLEn, LTAGn, LZSPn, LTEXPn) and
     is what step7 uses to pick the layers. Uses ZSPACE per slice from the sidecar of source_cube_path
     and the mapping from zspace_log_path; if phot_table_path is given, only slices with good==1.
-    exclude_frames: frames left out by hand (e.g. satellite tracks the photometry did not catch), as CCNN numbers of
-    the observation log: "1005, 1210-1212" or file names.
+    exclude_frames: slices of cube_path (the cube after the photometry) left out by hand, e.g. satellite tracks the
+    photometry did not catch: "5, 12-14", 1-based as in DS9.
     """
     cube, hdr = _read_cube_and_hdr(cube_path)
     meta_full = _slice_meta_from_source_cube(source_cube_path)
@@ -291,23 +274,17 @@ def build_linecont_cube(
 
     zmap = parse_zspace_log(zspace_log_path)
 
-    # frames excluded by hand
-    excl_ids, excl_bad = parse_frame_list(exclude_frames)
-    slice_ids = [frame_id(f) for f in frames["FILE"]] if "FILE" in frames.columns else [None] * len(zspaces)
-    excluded = [sid is not None and sid in excl_ids for sid in slice_ids]
-    excluded_files = [str(frames["FILE"].iloc[i]) for i in range(len(excluded)) if excluded[i]]
-    if excl_ids or excl_bad:
-        all_ids = {frame_id(f) for f in meta_full["FILE"]} if "FILE" in meta_full.columns else set()
-        in_cube = {s for s in slice_ids if s}
-        rejected = sorted(i for i in excl_ids if i in all_ids and i not in in_cube)
-        unknown = sorted(i for i in excl_ids if i not in all_ids)
-        print(f"[linecont] excluded by hand: {len(excluded_files)} frame(s)"
-              + (f" ({', '.join(excluded_files)})" if excluded_files else ""), flush=True)
-        if rejected:
-            print(f"[linecont] already rejected by the photometry: {', '.join(rejected)}", flush=True)
-        if unknown or excl_bad:
-            print(f"[linecont] WARNING: not frames of this cube: {', '.join(unknown + excl_bad)} "
-                  f"(numbers are CCNN of the observation log, e.g. 1005 or 1210-1212)", flush=True)
+    # slices excluded by hand (numbers of the cube after the photometry, 1-based)
+    excl_idx, excl_bad = parse_slice_list(exclude_frames, cube.shape[0])
+    excluded = [i in set(excl_idx) for i in range(cube.shape[0])]
+    files = frames["FILE"].astype(str).tolist() if "FILE" in frames.columns else [""] * cube.shape[0]
+    excluded_files = [f"{i + 1} ({files[i]})" if files[i] else str(i + 1) for i in excl_idx]
+    if excl_idx or excl_bad:
+        print(f"[linecont] excluded by hand: {len(excl_idx)} slice(s) of {Path(cube_path).name}"
+              + (f": {', '.join(excluded_files)}" if excl_idx else ""), flush=True)
+        if excl_bad:
+            print(f"[linecont] WARNING: not understood or outside 1..{cube.shape[0]}: {', '.join(excl_bad)} "
+                  f"(slice numbers of the cube after the photometry, e.g. 5, 12-14)", flush=True)
 
     labels = []
     kinds = []

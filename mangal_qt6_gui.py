@@ -475,10 +475,10 @@ class MangalQt(QWidget):
 
         # line+cont: frames left out of the sum by hand (satellite tracks the photometry does not catch)
         self.lc_exclude_edit = QLineEdit()
-        self.lc_exclude_edit.setPlaceholderText("e.g. 1005, 1210-1212")
+        self.lc_exclude_edit.setPlaceholderText("e.g. 5, 12-14")
         self.lc_exclude_edit.setToolTip(
-            "Frames NOT summed at line+cont (e.g. satellite tracks): numbers CCNN of the observation log "
-            "(cube CC, frame NN), ranges with '-'. The slice report <obj>_linecont.csv lists the file of every slice.")
+            "Slices of <obj>_phot.fits (the cube after the photometry, 1-based as in DS9) NOT summed at line+cont, "
+            "e.g. satellite tracks; ranges with '-'.")
         lc_box = QGroupBox("line+cont")
         grid_lc = QGridLayout(lc_box)
         grid_lc.addWidget(QLabel("exclude frames"), 0, 0)

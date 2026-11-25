@@ -250,10 +250,10 @@ Zspace=-1200 cont          → cont2
 ```
 
 Frames spoiled by something the photometry does not catch (a satellite track) can be left out by hand:
-`--lc-exclude-frames "1005, 1210-1212"` (GUI: *line+cont → exclude frames*). The numbers are those of the
-observation log (`t260417_1005`: cube 10, frame 05), so they do not change when the photometry rejects frames.
-The slice report `<obj>_linecont.csv` lists the file of every slice and marks the excluded ones; EXPTIME, NFRAMES
-and the layer exposures count only the frames used.
+`--lc-exclude-frames "5, 12-14"` (GUI: *line+cont → exclude frames*): slice numbers of `<obj>_phot.fits`, the cube
+after the photometry, counted from 1 as in DS9. The slice report `<obj>_linecont.csv` gives the slice number, file
+and ZSPACE of every slice and marks the excluded ones; EXPTIME, NFRAMES and the layer exposures count only the
+frames used. The numbers refer to the current `<obj>_phot.fits`: check them again after re-running the photometry.
 
 `--lc-group-by label` groups the continuum by label instead of by ZSPACE;
 `--no-lc-split` makes only two layers, `line` and `cont`. The layer table is stored in the header.

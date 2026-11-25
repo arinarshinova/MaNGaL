@@ -448,8 +448,8 @@ def main(argv=None) -> int:
     ap.add_argument("--shift-detect-snr", type=float, default=20.0, help="Detection threshold in robust sigma units for shift reference stars")
     ap.add_argument("--shift-search-half", type=int, default=30, help="Half-size of search window around previous-frame star position")
     ap.add_argument("--lc-exclude-frames", default="",
-                    help="line+cont: frames left out of the sum by hand (e.g. satellite tracks), as numbers CCNN of the "
-                         "observation log: \"1005, 1210-1212\" (or file names)")
+                    help="line+cont: slices of the cube after the photometry (<obj>_phot.fits, 1-based as in DS9) left "
+                         "out of the sum by hand, e.g. satellite tracks: \"5, 12-14\"")
     ap.add_argument("--shift-manual-pairs", action="store_true",
                     help="Merged cubes: click star pairs to register every other cube to the reference frame "
                          "(otherwise automatic, with the window only when that fails)")
