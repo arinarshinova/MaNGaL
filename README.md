@@ -177,9 +177,14 @@ python run_mangal.py --param PGC45443_auto.txt --object PGC45443 \
 - Layers with the same name (`Ha`, `NII`, `cont1`, …) are averaged with the exposure as weight. ZSPACE values of
   different nights are not comparable, so every layer gets its mean wavelength `LLAMn` (from the `.calib` file of
   each night); the 2D products carry it as `LAMBDA`. Exposures, frame numbers and the zenith distance are combined.
-- The result goes to `<write_dir>/../<obj>_combined/` with a report `<obj>_linecont.nights.csv` (transformation,
-  scale factors of every night); net, astrometry and apply ergs work there as usual, with the QE calibration of the
-  reference night.
+- The result goes to `<write_dir>/../<obj>_combined/`: the combined `<obj>_linecont.fits`, and right away the line,
+  continuum and net images (the net stage always follows the combination), a report `<obj>_linecont.nights.csv`
+  (transformation and scale factors of every night) and `QE_combined_<filter>.json`.
+- `QE_combined_<filter>.json` is the calibration averaged over the standards of all nights: the coefficient of every
+  night divided by its scale factor (units of the reference night), weighted by the line exposure. Astrometry and
+  apply ergs work in the combined folder as usual and use this calibration.
+- The headers of all products list the nights: `NNIGHTS`, `NIGHT0`, `NIGHT1`, … (night folder and date),
+  `NSCALE1`, … (scale factor of every night), and `HISTORY` lines with the transformations.
 
 In the GUI: tick *combine nights* and add the `write_dir` of the other nights with *+ night*.
 The QE calibration of every night is found by its `.calib` file, so the folders of different nights may lie side by side.

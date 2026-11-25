@@ -191,7 +191,10 @@ def _apply_ergs_stage(args, w_dir: Path, r_dir: Path, exp_filter, object_name: s
         except Exception:
             exp_filter = None
 
-    if args.ergcal_json:
+    combined = sorted(w_dir.glob(f"QE_combined_{exp_filter}.json" if exp_filter else "QE_combined_*.json"))
+    if combined and not args.ergcal_json:  # combined nights: calibration averaged over the standards of all nights
+        erg_json = combined[0]
+    elif args.ergcal_json:
         erg_json = Path(args.ergcal_json)
     else:  # the calibration of THIS night (nights lying side by side must not mix), else the newest one
         from mangal_combine import find_night_qe_json
@@ -539,6 +542,7 @@ def main(argv=None) -> int:
     if (args.net or args.astro or args.apply_ergs or args.combine_with) and not _earlier and not getattr(args, "standard", False):
         if args.combine_with:
             w_dir = _combine_stage(args, w_dir, [])
+            args.net = True  # line, continuum and net images of the combined cube
         if args.net or args.astro:
             _run_step7(args, params, w_dir, [])
         if args.apply_ergs:
@@ -900,6 +904,7 @@ def main(argv=None) -> int:
     if args.combine_with and not getattr(args, "standard", False):
         w_dir = _combine_stage(args, w_dir, _hint)
         _hint = []
+        args.net = True  # line, continuum and net images of the combined cube
 
     # Step7: continuum subtraction and astrometry
     if (args.net or args.astro) and not getattr(args, "standard", False):

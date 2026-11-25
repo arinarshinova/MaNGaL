@@ -1145,11 +1145,20 @@ class MangalQt(QWidget):
         extra_args = self._build_extra_args()
 
         if (not standard_mode) and self.chk_apply_ergs.isChecked():
-            erg_json = self._ensure_ergcal_json(rdir, chosen_wdir)
-            if erg_json is None:
-                self.log("[err] erg calibration was requested, but QE_*.json could not be prepared")
-                return 1
-            extra_args += ["--ergcal-json", str(erg_json)]
+            combining = self.chk_combine.isChecked() and bool(self._combine_nights())
+            averaged = sorted(chosen_wdir.glob("QE_combined_*.json"))  # write_dir = a combined folder
+            if averaged:
+                self.log(f"[info] combined data: averaged QE calibration {averaged[0].name}")
+                extra_args += ["--ergcal-json", str(averaged[0])]
+            else:
+                erg_json = self._ensure_ergcal_json(rdir, chosen_wdir)  # QE of this night exists / is built
+                if erg_json is None:
+                    self.log("[err] erg calibration was requested, but QE_*.json could not be prepared")
+                    return 1
+                if combining:  # the averaged calibration is written by the combination and used for it
+                    self.log("[info] combined nights: the QE calibration averaged over all nights will be used")
+                else:
+                    extra_args += ["--ergcal-json", str(erg_json)]
 
         cmd = [sys.executable, "-u", str(HERE / "run_mangal.py"), "--param", str(param_path), "--object", target_name] + extra_args
 
@@ -1163,9 +1172,10 @@ class MangalQt(QWidget):
 
         if self.chk_phot_auto.isChecked():
             self._show_photometry_products(w_dir)
-        if ret == 0 and (not standard_mode) and self.chk_net.isChecked():
+        combined_run = (not standard_mode) and self.chk_combine.isChecked() and bool(self._combine_nights())
+        if ret == 0 and (not standard_mode) and (self.chk_net.isChecked() or combined_run):
             prod_dir = w_dir
-            if self.chk_combine.isChecked() and self._combine_nights():  # net was made from the combined cube
+            if combined_run:  # net is always made from the combined cube
                 prod_dir = self._combine_out_dir(w_dir, target_name)
             self._show_subtraction_products(prod_dir, t_start)
         if ret == 0 and standard_mode and self.chk_qe.isChecked():

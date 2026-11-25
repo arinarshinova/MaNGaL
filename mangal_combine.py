@@ -446,6 +446,48 @@ def choose_scale(mode: str, k_star: float | None, k_std: float | None) -> tuple[
     return 1.0, "none (no stars, no QE calibration): 1.0"
 
 
+def combined_qe_calibration(per_night) -> dict | None:
+    """
+    Calibration of the combined cube from the standards of ALL nights. The cube is in counts/sec of night 0; the data
+    of night n were multiplied by its scale k_n, so its calibration in these units is coefficient_n / k_n. These are
+    averaged with the line exposure of the nights as weights (nights without a QE calibration are left out).
+    """
+    items = []
+    for nt, layers, _reg, rep in per_night:
+        if not nt.get("qe_json"):
+            continue
+        try:
+            d = json.loads(Path(nt["qe_json"]).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        w = sum(float(L.get("texp") or 0) for L in layers if L.get("kind") == "line") or float(rep["hdr"].get("EXPTIME") or 1.0)
+        items.append((rep, d, w))
+    if not items:
+        print("[combine] no QE calibration of any night: QE_combined_*.json is not written")
+        return None
+    out = {"filter": items[0][1].get("filter"), "nights": [],
+           "note": "average of coefficient(night)/scale(night), exposure-weighted; units: counts/sec of night 0"}
+    for key in ("line_mul_adu_to_erg", "cont_mul_adu_to_erg", "median_mul_adu_to_erg"):
+        vals = [(float(d[key]) / float(rep["k"]), w) for rep, d, w in items if d.get(key) is not None]
+        if vals:
+            out[key] = float(sum(v * w for v, w in vals) / sum(w for _, w in vals))
+    if "line_mul_adu_to_erg" not in out and "median_mul_adu_to_erg" in out:
+        out["line_mul_adu_to_erg"] = out["median_mul_adu_to_erg"]
+    for rep, d, w in items:
+        c = d.get("line_mul_adu_to_erg", d.get("median_mul_adu_to_erg"))
+        out["nights"].append({"night": rep["night"], "label": rep["label"], "qe_json": rep["qe_json"],
+                              "coefficient": c, "scale": rep["k"], "coefficient_night0_units": float(c) / float(rep["k"]),
+                              "weight_s": w})
+    msg = "[combine] averaged QE calibration %.4e" % out["line_mul_adu_to_erg"]
+    for e in out["nights"]:
+        msg += f"; night {e['night']} ({e['label']}): {e['coefficient_night0_units']:.4e}"
+    if len(out["nights"]) > 1:
+        v = [e["coefficient_night0_units"] for e in out["nights"]]
+        msg += f"; spread {100 * (max(v) - min(v)) / np.mean(v):.1f}%"
+    print(msg)
+    return out
+
+
 def combine_layer_stacks(stacks: list[np.ndarray], weights: list[float]) -> np.ndarray:
     """Pixel-wise weighted mean of the nights' images (NaN pixels of a night are left out)."""
     acc = np.zeros(stacks[0].shape, dtype=float)
@@ -484,7 +526,9 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
             cube = np.asarray(h[0].data, dtype=np.float32)
             hdr = h[0].header.copy()
         layers = read_layer_table(hdr, cube.shape[0])
-        rep = {"night": n, "w_dir": str(nt["w_dir"]), "linecont": nt["linecont"].name, "date": nt["date"],
+        label = " ".join(x for x in ((nt["r_dir"].name if nt["r_dir"] is not None else nt["w_dir"].name),
+                                     (nt["date"] or "")[:10]) if x)
+        rep = {"night": n, "label": label, "w_dir": str(nt["w_dir"]), "linecont": nt["linecont"].name, "date": nt["date"],
                "qe_json": nt["qe_json"].name if nt["qe_json"] else "", "hdr": hdr}
         if n == 0:
             reg = cube
@@ -565,6 +609,8 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
         print(f"[combine] layer {name}: {len(imgs)} night(s), exposure {sum(texps):.0f} s"
               + (f", mean wavelength {out_layers[-1]['lam']:.2f} A" if out_layers[-1]["lam"] else ""))
 
+    qe_comb = combined_qe_calibration(per_night)
+
     # header: reference night + totals over the nights
     hdr = ref_hdr.copy()
     hdrs = [rep["hdr"] for _, _, _, rep in per_night]
@@ -590,7 +636,7 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
     hdr["NNIGHTS"] = (len(per_night), "number of nights combined")
     for nt, _, _, rep in per_night:
         n = rep["night"]
-        hdr[f"NIGHT{n}"] = (str(rep["date"] or nt["w_dir"].name)[:60], "observation start of the night")
+        hdr[f"NIGHT{n}"] = (rep["label"][:60], "night " + ("(reference)" if n == 0 else "combined with night 0"))
         hdr[f"NSCALE{n}"] = (round(float(rep["k"]), 6), f"flux scale to night 0 ({rep['k_source'][:30]})")
         hdr["HISTORY"] = f"COMBINE night {n}: {nt['linecont'].name} in {nt['w_dir']}"
         if n:
@@ -601,6 +647,9 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
                               f"{rep['k_star'] if rep['k_star'] is None else round(rep['k_star'], 5)}, standards "
                               f"{rep['k_std'] if rep['k_std'] is None else round(rep['k_std'], 5)}")
     hdr["HISTORY"] = "COMBINE: layers of the same name averaged with exposure weights (counts/sec of night 0)"
+    if qe_comb is not None:
+        hdr["QECOMB"] = (float(f"{qe_comb['line_mul_adu_to_erg']:.6e}"), "averaged QE calibration [erg/cm2/ADU], night 0 units")
+        hdr["HISTORY"] = f"COMBINE: averaged QE calibration of {len(qe_comb['nights'])} night(s) -> QE_combined_*.json"
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -615,6 +664,11 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
         if cand.exists():
             shutil.copy2(cand, out_dir / f"{bn}_shift.stars.xy")
             break
+    if qe_comb is not None:
+        filt = qe_comb.get("filter") or "filter"
+        qp = out_dir / f"QE_combined_{filt}.json"
+        qp.write_text(json.dumps(qe_comb, indent=2), encoding="utf-8")
+        print(f"[OK] averaged QE calibration: {qp}")
     # report
     rows = [{k: v for k, v in rep.items() if k not in ("hdr", "A", "b")} for _, _, _, rep in per_night]
     pd.DataFrame(rows).to_csv(side_path(out_path, ".nights.csv"), index=False)
