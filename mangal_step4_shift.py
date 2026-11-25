@@ -782,8 +782,7 @@ def register_cube_to(target_img: np.ndarray, cube_work: np.ndarray, idx: Sequenc
     its frames IN PLACE onto that grid. Stars matched with any rotation (as for the combination of nights) or, if that
     fails / manual=True, pairs of stars clicked in a window, refined with all stars.
     """
-    from mangal_combine import (detect_stars, fit_affine, manual_pairs, match_stars, refine_transform,
-                                warp_to_reference)
+    from mangal_combine import detect_stars, manual_pairs, manual_registration, match_stars, warp_to_reference
     idx = list(idx)
     ts = detect_stars(target_img)
     img = cube_work[idx[0]].copy()  # its first frame (a median of several frames would erase drifting stars)
@@ -798,12 +797,11 @@ def register_cube_to(target_img: np.ndarray, cube_work: np.ndarray, idx: Sequenc
         rxy, mxy = manual_pairs(target_img, img, f"cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> {target_label}")
         if len(rxy) < 3:
             raise NoReferenceStarsError(f"cube {cid}: at least 3 star pairs are needed to register it, got {len(rxy)}")
-        A, b, _, rms = fit_affine(mxy, rxy)
-        npairs, method = len(rxy), "manual"
-        r2 = refine_transform(ts, ms, A, b)
-        if r2 is not None:
-            A, b, rms, npairs, method = r2["A"], r2["b"], r2["rms"], len(r2["ref_idx"]), "manual + refined"
+        A, b, rms, npairs, method = manual_registration(ts, ms, rxy, mxy, f"cube {cid}")
     angle = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
+    if rms > 1.5:
+        print(f"[shift cubes] WARNING: cube {cid} registered with rms {rms:.1f} px: its stars may look doubled. "
+              "Repeat with 'manual star pairs' and click well-separated, unambiguous stars.", flush=True)
     print(f"[shift cubes] cube {cid} (frames {idx[0] + 1}-{idx[-1] + 1}) -> {target_label}: {method}, {npairs} stars, "
           f"rms {rms:.2f} px, rotation {angle:+.2f} deg, shift ({b[0]:+.1f}, {b[1]:+.1f}) px", flush=True)
     shape = cube_work.shape[1:]

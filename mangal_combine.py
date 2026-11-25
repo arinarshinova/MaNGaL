@@ -196,6 +196,37 @@ def fit_affine(mov_xy: np.ndarray, ref_xy: np.ndarray):
     return A, b, res, float(np.sqrt(np.mean(np.sum(res ** 2, axis=1)))) if n else np.inf
 
 
+def fit_rigid(mov_xy: np.ndarray, ref_xy: np.ndarray):
+    """
+    ref = R @ mov + b with a pure rotation R (no scale, no shear): the plate scale of MaNGaL is the same for all cubes
+    and nights, so a few (possibly imprecise) clicked pairs must not produce a stretched image. Returns A, b, res, rms.
+    """
+    mc, rc = mov_xy.mean(axis=0), ref_xy.mean(axis=0)
+    H = (mov_xy - mc).T @ (ref_xy - rc)
+    U, _, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T)) or 1.0
+    A = Vt.T @ np.diag([1.0, d]) @ U.T
+    b = rc - A @ mc
+    res = ref_xy - (mov_xy @ A.T + b)
+    return A, b, res, float(np.sqrt(np.mean(np.sum(res ** 2, axis=1)))) if len(mov_xy) else np.inf
+
+
+def plausible(A: np.ndarray, tol: float = 0.01) -> bool:
+    """A transformation between MaNGaL frames is a rotation: scale and shear within tol (1 %)."""
+    sv = np.linalg.svd(A, compute_uv=False)
+    return bool(np.all(np.abs(sv - 1.0) < tol)) and np.linalg.det(A) > 0
+
+
+def report_pairs(rxy: np.ndarray, mxy: np.ndarray, A: np.ndarray, b: np.ndarray, label: str, warn_px: float = 1.5) -> float:
+    """rms of clicked pairs under the transformation; per-pair residuals and a warning when it is large."""
+    res = np.hypot(*(rxy - (mxy @ A.T + b)).T)
+    rms = float(np.sqrt(np.mean(res ** 2))) if len(res) else np.inf
+    if rms > warn_px:
+        print(f"[pairs] WARNING {label}: clicked pairs disagree, rms {rms:.1f} px (pairs probably mismatched); "
+              "residual of every pair: " + ", ".join(f"#{i + 1}: {r:.1f}px" for i, r in enumerate(res)), flush=True)
+    return rms
+
+
 def _nearest_pairs(ref_xy, mov_t, radius):
     """Mutual nearest neighbours closer than radius: list of (i_ref, j_mov)."""
     if len(ref_xy) == 0 or len(mov_t) == 0:
@@ -267,8 +298,8 @@ def match_stars(ref: np.ndarray, mov: np.ndarray, *, top: int = 30, min_sep: flo
     return refine_transform(ref, mov, A, b, min_pairs=min_pairs, max_rms=max_rms)
 
 
-def refine_transform(ref: np.ndarray, mov: np.ndarray, A: np.ndarray, b: np.ndarray, *, min_pairs: int = 4,
-                     max_rms: float = 0.8, radii=(6.0, 3.0, 2.0)) -> dict | None:
+def _refine(ref: np.ndarray, mov: np.ndarray, A: np.ndarray, b: np.ndarray, *, min_pairs: int = 4,
+            max_rms: float = 0.8, radii=(6.0, 3.0, 2.0)) -> dict | None:
     """
     Improve an approximate transformation (from the rotation search or from clicked pairs) with all detected stars:
     mutual-nearest pairs within shrinking radii, affine fit with outlier rejection.
@@ -282,17 +313,43 @@ def refine_transform(ref: np.ndarray, mov: np.ndarray, A: np.ndarray, b: np.ndar
             return None
         ri = np.array([p[0] for p in pairs])
         mi = np.array([p[1] for p in pairs])
-        A, b, res, rms = fit_affine(mov[mi, :2], ref[ri, :2])
+        A, b, res, rms = _fit_physical(mov[mi, :2], ref[ri, :2])
         r = np.hypot(*res.T)
         keep = r < max(3.0 * np.median(r) * 1.4826, 0.5)
         if keep.sum() >= min_pairs and keep.sum() < len(keep):
-            A, b, res, rms = fit_affine(mov[mi[keep], :2], ref[ri[keep], :2])
+            A, b, res, rms = _fit_physical(mov[mi[keep], :2], ref[ri[keep], :2])
             ri, mi = ri[keep], mi[keep]
     # a true match explains a good part of the stars; a few chance coincidences do not
     need = max(min_pairs, int(0.25 * min(len(ref), len(mov))))
     if rms > max_rms or len(ri) < need:
         return None
     return {"A": A, "b": b, "ref_idx": ri, "mov_idx": mi, "rms": rms, "angle": float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))}
+
+
+refine_transform = _refine
+
+
+def _fit_physical(mov_xy, ref_xy):
+    """Affine fit if it is a plausible rotation (it absorbs tiny distortions), else a pure rotation + shift."""
+    A, b, res, rms = fit_affine(mov_xy, ref_xy)
+    if plausible(A):
+        return A, b, res, rms
+    return fit_rigid(mov_xy, ref_xy)
+
+
+def manual_registration(ref_stars, mov_stars, rxy, mxy, label: str):
+    """
+    Transformation from clicked pairs: pure rotation + shift from the clicks (robust with few, imprecise pairs),
+    then refined with all detected stars, starting with a wide search radius. Returns (A, b, rms, npairs, method).
+    """
+    A, b, _, rms = fit_rigid(mxy, rxy)
+    report_pairs(rxy, mxy, A, b, label)
+    r2 = _refine(ref_stars, mov_stars, A, b, radii=(15.0, 8.0, 4.0, 2.0))
+    if r2 is not None:
+        return r2["A"], r2["b"], r2["rms"], len(r2["ref_idx"]), "manual + refined"
+    print(f"[pairs] {label}: refinement with all stars failed; rotation + shift from the clicks is used "
+          f"(rms {rms:.2f} px)", flush=True)
+    return A, b, rms, len(rxy), "manual (rotation + shift)"
 
 
 def centroid_refine(img: np.ndarray, x: float, y: float, radius: int = 8) -> tuple[float, float]:
@@ -546,11 +603,7 @@ def combine_nights(ref_w_dir, other_w_dirs, out_dir, *, object_name: str | None 
                 rxy, mxy = manual_pairs(ref_sum, img, f"night {n}: {nt['linecont'].name}")
                 if len(rxy) < 3:
                     raise RuntimeError(f"night {n}: at least 3 star pairs are needed, got {len(rxy)}")
-                A, b, _, rms = fit_affine(mxy, rxy)
-                npairs, method = len(rxy), "manual"
-                ref_m = refine_transform(ref_stars, stars, A, b)  # clicks = first guess, all stars = precision
-                if ref_m is not None:
-                    A, b, rms, npairs, method = ref_m["A"], ref_m["b"], ref_m["rms"], len(ref_m["ref_idx"]), "manual + refined"
+                A, b, rms, npairs, method = manual_registration(ref_stars, stars, rxy, mxy, f"night {n}")
             angle = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
             print(f"[combine] night {n}: {method} registration, {npairs} stars, rms {rms:.2f} px, rotation {angle:+.2f} deg, "
                   f"shift ({b[0]:+.1f}, {b[1]:+.1f}) px")
